@@ -106,6 +106,14 @@ def _cn_now():
     return dt.datetime.now(pytz.timezone("Asia/Shanghai"))
 
 
+def _is_market_open(now: dt.datetime) -> bool:
+    # A股交易时段：09:30-11:30, 13:00-15:00（工作日）
+    if now.weekday() >= 5:
+        return False
+    t = now.time()
+    return (dt.time(9, 30) <= t <= dt.time(11, 30)) or (dt.time(13, 0) <= t <= dt.time(15, 0))
+
+
 def _secid(code: str) -> str:
     return f"1.{code}" if code.startswith(("5", "6", "9")) else f"0.{code}"
 
@@ -401,6 +409,19 @@ def api_monitor_signals():
     step = int(request.args.get("step", "0") or 0)
     keyword = (request.args.get("keyword") or "").strip()
     favorites_only = (request.args.get("favorites_only") or "0") == "1"
+    replay_mode = (request.args.get("replay") or "0") == "1"
+    now = _cn_now()
+
+    if not _is_market_open(now) and not replay_mode:
+        return jsonify({
+            "ok": True,
+            "data": [],
+            "market_open": False,
+            "message": "当前非A股连续竞价时段（09:30-11:30，13:00-15:00），实时监控已暂停。可开启回放模式查看。",
+            "ts": now.strftime("%H:%M:%S"),
+            "server_time": now.strftime("%Y-%m-%d %H:%M:%S"),
+        })
+
     rows = [_build_signal_row(s, n, step=step) for s, n in SYMBOL_POOL]
 
     if keyword:
@@ -410,19 +431,38 @@ def api_monitor_signals():
         rows = [x for x in rows if x["symbol"] in fav]
 
     rows.sort(key=lambda x: x["signal_score"], reverse=True)
-    now = _cn_now()
-    return jsonify({"ok": True, "data": rows, "ts": now.strftime("%H:%M:%S"), "server_time": now.strftime("%Y-%m-%d %H:%M:%S")})
+    return jsonify({"ok": True, "data": rows, "market_open": True, "ts": now.strftime("%H:%M:%S"), "server_time": now.strftime("%Y-%m-%d %H:%M:%S")})
 
 
 @app.route("/api/monitor/detail")
 def api_monitor_detail():
     symbol = (request.args.get("symbol") or "600519").strip()
     step = int(request.args.get("step", "0") or 0)
+    replay_mode = (request.args.get("replay") or "0") == "1"
+    now = _cn_now()
+
     live_price = 0.0
     try:
         live_price = _fetch_spot_price(symbol)
     except Exception:
         live_price = 0.0
+
+    if not _is_market_open(now) and not replay_mode:
+        return jsonify(
+            {
+                "ok": True,
+                "data": {
+                    "symbol": symbol,
+                    "live_price": round(live_price, 2),
+                    "metrics": {"m5": {"net_buy": 0, "buy_ratio": 1}, "m10": {"net_buy": 0, "buy_ratio": 1}, "m30": {"net_buy": 0, "buy_ratio": 1}},
+                    "series_1m": [],
+                    "big_trades": [],
+                    "market_open": False,
+                    "message": "当前非连续竞价时段，逐笔监控暂停。",
+                },
+            }
+        )
+
     trades = _gen_trades(symbol, step=step, seconds=90, base_price=live_price)
     met = _metrics(trades, threshold=MONITOR_CFG["big_trade_threshold"])
 

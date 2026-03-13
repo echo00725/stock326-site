@@ -126,13 +126,17 @@ function toggleSort(){ sortBy = sortBy==='signal_score' ? 'net_buy_10s' : 'signa
 
 async function refreshRank(){
   if(el.replay.checked) step += 3;
-  const q=new URLSearchParams({keyword:el.kw.value||'',favorites_only:el.favOnly.checked?'1':'0',step:String(step)});
+  const q=new URLSearchParams({keyword:el.kw.value||'',favorites_only:el.favOnly.checked?'1':'0',replay:el.replay.checked?'1':'0',step:String(step)});
   const res = await fetch('/api/monitor/signals?'+q);
   const j=await res.json();
   const arr=(j.data||[]).sort((a,b)=>Number(b[sortBy])-Number(a[sortBy]));
   if(j.server_time){ el.clock.textContent = `服务器时间 ${j.server_time}`; }
   const tb=document.querySelector('#rankTbl tbody'); tb.innerHTML='';
-  if(arr.length===0){ tb.innerHTML = '<tr><td colspan="8" style="text-align:center;color:#8ea3d6">暂无数据（请检查筛选条件）</td></tr>'; return; }
+  if(arr.length===0){
+    const msg = j.message || '暂无数据（请检查筛选条件）';
+    tb.innerHTML = `<tr><td colspan="8" style="text-align:center;color:#8ea3d6">${msg}</td></tr>`;
+    return;
+  }
   arr.forEach(x=>{
     const tr=document.createElement('tr');
     tr.innerHTML=`<td>${x.symbol} ${x.name}</td><td>${Number(x.price||0).toFixed(2)}</td><td>${x.big_buy_count_10s}</td><td>${fmt(x.net_buy_10s)}</td><td>${x.buy_ratio_10s}</td><td>${(Number(x.price_change_10s||0)*100).toFixed(2)}%</td><td>${x.signal_score}</td><td>${x.triggered?'<span class="tag buy">触发</span>':'<span class="tag sell">观察</span>'}</td>`;
@@ -156,7 +160,7 @@ function draw(series){
 }
 
 async function refreshDetail(){
-  const res = await fetch(`/api/monitor/detail?symbol=${current}&step=${step}`);
+  const res = await fetch(`/api/monitor/detail?symbol=${current}&step=${step}&replay=${el.replay.checked?'1':'0'}`);
   const j=await res.json();
   const d=j.data; if(!d) return;
   el.detailTitle.textContent=`单股详情：${d.symbol}（现价 ${Number(d.live_price||0).toFixed(2)}）`;
