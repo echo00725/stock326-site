@@ -7,9 +7,6 @@ import pytz
 from apscheduler.schedulers.background import BackgroundScheduler
 from flask import Flask, jsonify, render_template, request
 
-from strategy import AShareShortTermEngine
-from news_fetcher import fetch_news_24h
-from volume_profile import get_volume_profile
 
 app = Flask(__name__)
 app.json.ensure_ascii = False
@@ -18,11 +15,15 @@ VALIDATION_FILE = Path(__file__).parent / "data" / "validation.json"
 
 
 def run_daily_job():
+    from strategy import AShareShortTermEngine
+
     engine = AShareShortTermEngine(top_n=20, candidate_n=600)
     engine.run_daily()
 
 
 def run_validation_job():
+    from strategy import AShareShortTermEngine
+
     engine = AShareShortTermEngine(top_n=20, candidate_n=600)
     engine.build_validation(recent_days=140)
 
@@ -75,11 +76,15 @@ def api_validation():
 
 @app.route("/news")
 def news_page():
+    from news_fetcher import fetch_news_24h
+
     return render_template("news.html", data=fetch_news_24h())
 
 
 @app.route("/api/news")
 def api_news():
+    from news_fetcher import fetch_news_24h
+
     return jsonify(fetch_news_24h())
 
 
@@ -90,6 +95,8 @@ def volume_profile_page():
 
 @app.route("/api/volume-profile")
 def api_volume_profile():
+    from volume_profile import get_volume_profile
+
     symbol = (request.args.get("symbol") or "").strip()
     days = (request.args.get("days") or "1").strip()
     if not symbol:
@@ -99,6 +106,21 @@ def api_volume_profile():
         return jsonify({"ok": True, "data": data})
     except Exception as e:
         return jsonify({"ok": False, "error": str(e)}), 500
+
+
+@app.route("/parse-admin")
+def parse_admin_page():
+    from volume_profile import get_volume_profile
+
+    symbol = (request.args.get("symbol") or "600519").strip()
+    days = int((request.args.get("days") or "1").strip() or 1)
+    err = None
+    data = None
+    try:
+        data = get_volume_profile(symbol, days=days)
+    except Exception as e:
+        err = str(e)
+    return render_template("parse_admin.html", symbol=symbol, days=days, data=data, err=err)
 
 
 @app.route("/api/run-now")

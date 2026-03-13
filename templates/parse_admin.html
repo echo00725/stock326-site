@@ -1,0 +1,66 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>后台解析页</title>
+  <link rel="stylesheet" href="/static/style.css" />
+  <style>
+    .row{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
+    .input{padding:8px 10px;border:1px solid #d1d5db;border-radius:8px;min-width:160px}
+    table{width:100%;border-collapse:collapse;font-size:13px}
+    th,td{border-bottom:1px solid #e5e7eb;padding:6px 8px;text-align:right}
+    th:first-child,td:first-child{text-align:left}
+  </style>
+</head>
+<body>
+<main class="container">
+  <h1>🧩 后台解析页（真实数据明细）</h1>
+  <section class="card">
+    <form class="row" method="get" action="/parse-admin">
+      <input class="input" name="symbol" value="{{ symbol }}" placeholder="股票代码 600519" />
+      <input class="input" name="days" value="{{ days }}" placeholder="交易日数 1/2/30" />
+      <button class="btn" type="submit">重新解析</button>
+      <a class="btn secondary" href="/">返回首页</a>
+    </form>
+  </section>
+
+  {% if err %}
+  <section class="card"><p style="color:#b91c1c">解析失败：{{ err }}</p></section>
+  {% endif %}
+
+  {% if data %}
+  <section class="card">
+    <p>
+      代码 {{ data.symbol }} | 区间 {{ data.start_date }} ~ {{ data.end_date }} ({{ data.range_days }}日)
+      | 总成交量 {{ data.total_volume }} 股
+      | 总成交额 {{ data.total_amount }}
+      | 来源 {{ data.source }}
+    </p>
+  </section>
+
+  <section class="card">
+    <h2>按价位聚合明细（前300行）</h2>
+    <table>
+      <thead>
+        <tr>
+          <th>价格</th><th>成交量(股)</th><th>成交额</th><th>量占比%</th><th>额占比%</th>
+        </tr>
+      </thead>
+      <tbody>
+      {% for r in data.profile[:300] %}
+        <tr>
+          <td>{{ '%.2f'|format(r.price) }}</td>
+          <td>{{ r.volume }}</td>
+          <td>{{ '%.2f'|format(r.amount) }}</td>
+          <td>{{ r.volume_pct }}</td>
+          <td>{{ r.amount_pct }}</td>
+        </tr>
+      {% endfor %}
+      </tbody>
+    </table>
+  </section>
+  {% endif %}
+</main>
+</body>
+</html>
