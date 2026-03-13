@@ -89,6 +89,7 @@
 
 <script>
 let current='600519', sortBy='signal_score', step=0;
+const TODAY_KEY = `bbm_cache_${new Date().toISOString().slice(0,10)}`;
 const el = {
   kw: document.getElementById('kw'),
   favOnly: document.getElementById('favOnly'),
@@ -102,6 +103,13 @@ const el = {
   metrics: document.getElementById('metrics')
 };
 function fmt(n){return Number(n||0).toLocaleString('zh-CN',{maximumFractionDigits:2})}
+function loadLocal(){ try{return JSON.parse(localStorage.getItem(TODAY_KEY)||'{}')}catch{return {}} }
+function saveLocal(obj){ try{localStorage.setItem(TODAY_KEY, JSON.stringify(obj))}catch{} }
+function upsertLocalSymbol(symbol, payload){
+  const db = loadLocal();
+  db[symbol] = {...(db[symbol]||{}), ...payload, updatedAt: new Date().toISOString()};
+  saveLocal(db);
+}
 
 async function loadCfg(){
   const res = await fetch('/api/monitor/config');
@@ -131,8 +139,27 @@ async function refreshRank(){
   const j=await res.json();
   const arr=(j.data||[]).sort((a,b)=>Number(b[sortBy])-Number(a[sortBy]));
   if(j.server_time){ el.clock.textContent = `服务器时间 ${j.server_time}`; }
+  if(arr.length){
+    const db = loadLocal();
+    arr.forEach(x=>{ db[x.symbol] = {...(db[x.symbol]||{}), row:x, updatedAt:new Date().toISOString()}; });
+    saveLocal(db);
+  }
   const tb=document.querySelector('#rankTbl tbody'); tb.innerHTML='';
   if(arr.length===0){
+    if(el.replay.checked){
+      const db = loadLocal();
+      const cached = Object.values(db).map(v=>v.row).filter(Boolean);
+      if(cached.length){
+        cached.sort((a,b)=>Number(b[sortBy])-Number(a[sortBy]));
+        cached.forEach(x=>{
+          const tr=document.createElement('tr');
+          tr.innerHTML=`<td>${x.symbol} ${x.name}</td><td>${Number(x.price||0).toFixed(2)}</td><td>${x.big_buy_count_10s}</td><td>${fmt(x.net_buy_10s)}</td><td>${x.buy_ratio_10s}</td><td>${(Number(x.price_change_10s||0)*100).toFixed(2)}%</td><td>${x.signal_score}</td><td><span class="tag buy">回放缓存</span></td>`;
+          tr.onclick=()=>{current=x.symbol; refreshDetail();};
+          tb.appendChild(tr);
+        });
+        return;
+      }
+    }
     const msg = j.message || '暂无数据（请检查筛选条件）';
     tb.innerHTML = `<tr><td colspan="8" style="text-align:center;color:#8ea3d6">${msg}</td></tr>`;
     return;
@@ -162,7 +189,26 @@ function draw(series){
 async function refreshDetail(){
   const res = await fetch(`/api/monitor/detail?symbol=${current}&step=${step}&replay=${el.replay.checked?'1':'0'}`);
   const j=await res.json();
-  const d=j.data; if(!d) return;
+  const d=j.data; 
+  if((!d || !d.big_trades || d.big_trades.length===0) && el.replay.checked){
+    const db = loadLocal();
+    const cache = db[current] || null;
+    if(cache && cache.detail){
+      const cd = cache.detail;
+      el.detailTitle.textContent=`单股详情：${cd.symbol}（现价 ${Number(cd.live_price||0).toFixed(2)}）`;
+      const m=cd.metrics||{m5:{net_buy:0},m10:{net_buy:0,buy_ratio:1},m30:{net_buy:0}};
+      el.metrics.innerHTML=`5秒净买入: <b>${fmt(m.m5.net_buy)}</b> ｜10秒净买入: <b>${fmt(m.m10.net_buy)}</b> ｜30秒净买入: <b>${fmt(m.m30.net_buy)}</b> ｜10秒买入强度比: <b>${m.m10.buy_ratio}</b>`;
+      draw(cd.series_1m||[]);
+      const tbb=document.querySelector('#bigTbl tbody'); tbb.innerHTML='';
+      (cd.big_trades||[]).forEach(x=>{
+        const tr=document.createElement('tr');
+        tr.innerHTML=`<td>${x.ts}</td><td>${x.side==='buy'?'<span class="tag buy">主动买</span>':'<span class="tag sell">主动卖</span>'}</td><td>${Number(x.price||0).toFixed(2)}</td><td>${x.volume_hand||0}</td><td>${fmt(x.amount||0)}</td>`;
+        tbb.appendChild(tr);
+      });
+      return;
+    }
+  }
+  if(!d) return;
   el.detailTitle.textContent=`单股详情：${d.symbol}（现价 ${Number(d.live_price||0).toFixed(2)}）`;
   const m=d.metrics;
   el.metrics.innerHTML=`5秒净买入: <b>${fmt(m.m5.net_buy)}</b> ｜10秒净买入: <b>${fmt(m.m10.net_buy)}</b> ｜30秒净买入: <b>${fmt(m.m30.net_buy)}</b> ｜10秒买入强度比: <b>${m.m10.buy_ratio}</b>`;
@@ -170,9 +216,10 @@ async function refreshDetail(){
   const tb=document.querySelector('#bigTbl tbody'); tb.innerHTML='';
   (d.big_trades||[]).forEach(x=>{
     const tr=document.createElement('tr');
-    tr.innerHTML=`<td>${x.ts}</td><td>${x.side==='buy'?'<span class="tag buy">主动买</span>':'<span class="tag sell">主动卖</span>'}</td><td>${x.price.toFixed(2)}</td><td>${x.volume_hand}</td><td>${fmt(x.amount)}</td>`;
+    tr.innerHTML=`<td>${x.ts}</td><td>${x.side==='buy'?'<span class="tag buy">主动买</span>':'<span class="tag sell">主动卖</span>'}</td><td>${Number(x.price||0).toFixed(2)}</td><td>${x.volume_hand||0}</td><td>${fmt(x.amount||0)}</td>`;
     tb.appendChild(tr);
-  })
+  });
+  upsertLocalSymbol(current, {detail:d});
 }
 
 async function refreshAll(){
