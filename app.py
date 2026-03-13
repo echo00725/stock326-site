@@ -26,8 +26,12 @@ def load_json(path: Path, default: dict):
 
 
 def save_json(path: Path, data: dict):
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+    except OSError:
+        # Serverless 只读文件系统，忽略本地写盘
+        return
 
 
 def fallback_rankings() -> dict:
