@@ -22,7 +22,7 @@
   </section>
 </main>
 <script>
-function fmt(n){return Number(n||0).toFixed(2)}
+function fmt(n){ if(n===null||n===undefined||Number.isNaN(Number(n))) return '--'; return Number(n).toFixed(2)}
 function setStatus(t){ const el=document.getElementById('status'); if(el) el.innerText='状态：'+t; }
 function render(d){
   const lg=document.getElementById('logic');

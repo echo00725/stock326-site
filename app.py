@@ -296,7 +296,6 @@ def _oversold_rebound_scan() -> dict:
         dd60 = u["chg60"]  # 近60日涨跌幅(%)，负值越小越超跌
         rebound = u["chg"]
         turnover = u["turnover"]
-        # 全市场快照口径：用60日跌幅+当日反弹+换手近似替代复杂慢指标
         is_oversold = dd60 <= -25
         if not is_oversold:
             continue
@@ -307,8 +306,8 @@ def _oversold_rebound_scan() -> dict:
                 "name": u["name"],
                 "price": round(u["price"], 2),
                 "dd60": round(dd60, 2),
-                "rsi14": 0,
-                "ma20_gap": 0,
+                "rsi14": None,
+                "ma20_gap": None,
                 "rebound_day": round(rebound, 2),
                 "turnover": round(turnover, 2),
                 "amount": round(u["amount"] / 1e8, 2),
@@ -316,19 +315,40 @@ def _oversold_rebound_scan() -> dict:
                 "reason": f"60日涨跌幅{dd60:.1f}%，当日{rebound:.1f}%，换手{turnover:.1f}%",
             }
         )
+
+    # 第二阶段：仅对候选前120补算日线指标，避免全市场逐只拉K导致超时
     rows.sort(key=lambda x: x["score"], reverse=True)
+    enrich_n = min(120, len(rows))
+    for i in range(enrich_n):
+        x = rows[i]
+        try:
+            kl = _fetch_daily_kline(x["code"], lmt=40)
+            if len(kl) < 25:
+                continue
+            closes = [k["close"] for k in kl]
+            c = closes[-1]
+            ma20 = sum(closes[-20:]) / 20 if len(closes) >= 20 else 0
+            rsi = _rsi14(closes)
+            ma_gap = (c / ma20 - 1) * 100 if ma20 > 0 else None
+            x["rsi14"] = round(rsi, 2)
+            x["ma20_gap"] = round(ma_gap, 2) if ma_gap is not None else None
+            x["reason"] = f"60日涨跌幅{x['dd60']:.1f}%，RSI14={x['rsi14']}, 偏离MA20={x['ma20_gap']}%，当日{x['rebound_day']:.1f}%"
+        except Exception:
+            continue
+
     return {
         "updated_at": now,
         "logic": {
-            "oversold": "全市场快照口径：60日涨跌幅<=-25% 认定超跌",
+            "oversold": "全市场快照口径：60日涨跌幅<=-25% 认定超跌；候选再补算RSI14与MA20偏离",
             "rebound_signal": "当日涨跌幅、换手率、成交额参与反弹评分",
-            "score": "score=超跌深度+当日反弹+换手+流动性，范围0-100（快速全市场版）",
+            "score": "score=超跌深度+当日反弹+换手+流动性，范围0-100（两段式）",
         },
         "scan_info": {
             "ok_pages": ok_pages,
             "total_pages": total_pages,
             "scanned_stocks": len(uni),
             "note": "若ok_pages小于total_pages，通常是数据源限流/反爬导致部分分片失败",
+            "enriched_candidates": enrich_n,
         },
         "items": rows[:30],
     }
