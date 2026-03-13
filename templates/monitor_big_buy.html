@@ -1,0 +1,153 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>短线盘口大笔主动买入监控</title>
+  <link rel="stylesheet" href="/static/style.css" />
+  <style>
+    body{background:#0b1220;color:#dbe7ff}
+    .container{max-width:1400px}
+    .topbar,.panel{background:#111a2e;border:1px solid #223052;border-radius:12px}
+    .topbar{padding:10px 12px;display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-bottom:12px}
+    .input{background:#0e1628;color:#e6eeff;border:1px solid #2a3d69;border-radius:8px;padding:8px 10px}
+    .layout{display:grid;grid-template-columns: 1.1fr 0.9fr;gap:12px}
+    .panel{padding:12px}
+    table{width:100%;border-collapse:collapse;font-size:13px}
+    th,td{border-bottom:1px solid #243457;padding:8px 6px;text-align:right}
+    th:first-child,td:first-child{text-align:left}
+    tr:hover{background:#15213b;cursor:pointer}
+    .tag{display:inline-block;padding:2px 8px;border-radius:999px;font-size:12px}
+    .buy{background:#123a24;color:#5df29d}.sell{background:#3f1a22;color:#ff9aaa}
+    .row2{display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-top:12px}
+    canvas{width:100%;height:220px;background:#0b1427;border-radius:10px;border:1px solid #243457}
+    .muted{color:#8ea3d6}
+    .btn{background:#2563eb}
+    .btn.secondary{background:#334155}
+  </style>
+</head>
+<body>
+<main class="container">
+  <h1>⚡ A股短线盯盘｜盘口大笔主动买入监控</h1>
+
+  <section class="topbar">
+    <input id="kw" class="input" placeholder="代码/名称筛选" />
+    <label class="muted"><input type="checkbox" id="favOnly"/> 仅收藏</label>
+    <label class="muted">大单阈值(元) <input id="th" class="input" style="width:120px" value="300000"/></label>
+    <label class="muted">最小买入强度比 <input id="minRatio" class="input" style="width:80px" value="1.2"/></label>
+    <label class="muted">最小10秒净买入 <input id="minNet" class="input" style="width:110px" value="200000"/></label>
+    <label class="muted"><input type="checkbox" id="replay"/> 回放模式</label>
+    <button class="btn" onclick="saveCfg()">保存阈值</button>
+    <button class="btn secondary" onclick="toggleSort()">切换排序</button>
+    <a class="btn secondary" href="/">返回首页</a>
+  </section>
+
+  <section class="layout">
+    <div class="panel">
+      <h2>实时信号排行榜</h2>
+      <table id="rankTbl">
+        <thead>
+          <tr>
+            <th>代码</th><th>现价</th><th>10秒大买次数</th><th>10秒净买入</th><th>买入强度比</th><th>10秒涨幅</th><th>信号分</th><th>状态</th>
+          </tr>
+        </thead>
+        <tbody></tbody>
+      </table>
+    </div>
+
+    <div class="panel">
+      <h2 id="detailTitle">单股详情</h2>
+      <div id="metrics" class="muted">请选择左侧标的</div>
+
+      <h3>最近1分钟净买入与价格走势</h3>
+      <canvas id="cv" width="640" height="260"></canvas>
+
+      <h3>最近逐笔大单列表</h3>
+      <table id="bigTbl"><thead><tr><th>时间</th><th>方向</th><th>价格</th><th>手数</th><th>金额</th></tr></thead><tbody></tbody></table>
+    </div>
+  </section>
+
+  <section class="row2">
+    <div class="panel">
+      <h3>公式编辑</h3>
+      <p class="muted">支持变量：big_buy_count_10s, buy_ratio_10s, net_buy_10s, price_change_10s；函数：min/max/abs</p>
+      <textarea id="formula" class="input" style="width:100%;height:88px">(big_buy_count_10s>=2)*25 + min(max((buy_ratio_10s-1)*20,0),35) + min(max(price_change_10s*120,0),20) + min(max(net_buy_10s/200000,0),20)</textarea>
+      <div style="margin-top:8px"><button class="btn" onclick="saveCfg()">保存公式</button></div>
+    </div>
+    <div class="panel">
+      <h3>指标解释</h3>
+      <ul class="muted">
+        <li>主动买入：成交价≥卖一；主动卖出：成交价≤买一；其余按 tick rule。</li>
+        <li>大单阈值默认 30 万，单笔金额=成交价×成交量(手)×100。</li>
+        <li>信号触发参考：10秒连续多笔大买 + 净买入显著为正 + 买入强度比>1 + 价格抬升。</li>
+      </ul>
+    </div>
+  </section>
+</main>
+
+<script>
+let current='600519', sortBy='signal_score', step=0;
+function fmt(n){return Number(n||0).toLocaleString('zh-CN',{maximumFractionDigits:2})}
+
+async function loadCfg(){
+  const j=await (await fetch('/api/monitor/config')).json();
+  const c=j.data||{};
+  th.value=c.big_trade_threshold||300000; minRatio.value=c.min_buy_ratio||1.2; minNet.value=c.min_net_buy_10s||200000; formula.value=c.signal_formula||formula.value;
+}
+async function saveCfg(){
+  await fetch('/api/monitor/config',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({
+    big_trade_threshold:Number(th.value||300000),min_buy_ratio:Number(minRatio.value||1.2),min_net_buy_10s:Number(minNet.value||200000),signal_formula:formula.value
+  })});
+  refreshAll();
+}
+
+function toggleSort(){ sortBy = sortBy==='signal_score' ? 'net_buy_10s' : 'signal_score'; refreshRank(); }
+
+async function refreshRank(){
+  if(replay.checked) step += 3;
+  const q=new URLSearchParams({keyword:kw.value||'',favorites_only:favOnly.checked?'1':'0',step:String(step)});
+  const j=await (await fetch('/api/monitor/signals?'+q)).json();
+  const arr=(j.data||[]).sort((a,b)=>Number(b[sortBy])-Number(a[sortBy]));
+  const tb=document.querySelector('#rankTbl tbody'); tb.innerHTML='';
+  arr.forEach(x=>{
+    const tr=document.createElement('tr');
+    tr.innerHTML=`<td>${x.symbol} ${x.name}</td><td>${x.price.toFixed(2)}</td><td>${x.big_buy_count_10s}</td><td>${fmt(x.net_buy_10s)}</td><td>${x.buy_ratio_10s}</td><td>${(x.price_change_10s*100).toFixed(2)}%</td><td>${x.signal_score}</td><td>${x.triggered?'<span class="tag buy">触发</span>':'<span class="tag sell">观察</span>'}</td>`;
+    tr.onclick=()=>{current=x.symbol; refreshDetail();};
+    tb.appendChild(tr);
+  });
+}
+
+function draw(series){
+  const cv=document.getElementById('cv'); const c=cv.getContext('2d');
+  c.clearRect(0,0,cv.width,cv.height); if(!series||!series.length) return;
+  const pad=20, w=cv.width-pad*2, h=cv.height-pad*2;
+  const ps=series.map(x=>x.price), ns=series.map(x=>x.net_buy_cum);
+  const pMin=Math.min(...ps), pMax=Math.max(...ps), nMin=Math.min(...ns), nMax=Math.max(...ns);
+  const xp=(i)=>pad+i*(w/(series.length-1));
+  const yp=(v)=>pad+h-(v-pMin)/(pMax-pMin+1e-9)*h;
+  const yn=(v)=>pad+h-(v-nMin)/(nMax-nMin+1e-9)*h;
+  c.strokeStyle='#22c55e'; c.lineWidth=2; c.beginPath(); series.forEach((x,i)=>{const X=xp(i),Y=yp(x.price); i?c.lineTo(X,Y):c.moveTo(X,Y)}); c.stroke();
+  c.strokeStyle='#60a5fa'; c.beginPath(); series.forEach((x,i)=>{const X=xp(i),Y=yn(x.net_buy_cum); i?c.lineTo(X,Y):c.moveTo(X,Y)}); c.stroke();
+  c.fillStyle='#9fb4de'; c.fillText('绿色=价格', pad, 14); c.fillText('蓝色=净买入累计', pad+90, 14);
+}
+
+async function refreshDetail(){
+  const j=await (await fetch(`/api/monitor/detail?symbol=${current}&step=${step}`)).json();
+  const d=j.data; if(!d) return;
+  detailTitle.textContent=`单股详情：${d.symbol}`;
+  const m=d.metrics;
+  metrics.innerHTML=`5秒净买入: <b>${fmt(m.m5.net_buy)}</b> ｜10秒净买入: <b>${fmt(m.m10.net_buy)}</b> ｜30秒净买入: <b>${fmt(m.m30.net_buy)}</b> ｜10秒买入强度比: <b>${m.m10.buy_ratio}</b>`;
+  draw(d.series_1m||[]);
+  const tb=document.querySelector('#bigTbl tbody'); tb.innerHTML='';
+  (d.big_trades||[]).forEach(x=>{
+    const tr=document.createElement('tr');
+    tr.innerHTML=`<td>${x.ts}</td><td>${x.side==='buy'?'<span class="tag buy">主动买</span>':'<span class="tag sell">主动卖</span>'}</td><td>${x.price.toFixed(2)}</td><td>${x.volume_hand}</td><td>${fmt(x.amount)}</td>`;
+    tb.appendChild(tr);
+  })
+}
+
+async function refreshAll(){await refreshRank(); await refreshDetail();}
+setInterval(refreshAll, 3000);
+loadCfg().then(refreshAll);
+</script>
+</body></html>
