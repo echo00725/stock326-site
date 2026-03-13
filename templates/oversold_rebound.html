@@ -1,0 +1,33 @@
+<!doctype html>
+<html lang="zh-CN"><head>
+<meta charset="UTF-8"/><meta name="viewport" content="width=device-width,initial-scale=1"/>
+<title>超跌反弹扫描</title>
+<link rel="stylesheet" href="/static/style.css"/><link rel="stylesheet" href="/static/dark.css"/>
+</head><body>
+<main class="container">
+  <h1>📉 超跌反弹扫描</h1>
+  <p class="sub">目标：识别已处于超跌区间且具备短线反弹概率的A股标的。</p>
+  <section class="card">
+    <h2>筛选逻辑（公开展示）</h2>
+    <ul id="logic"></ul>
+    <div style="display:flex;gap:8px;flex-wrap:wrap"><button class="btn" onclick="refreshData()">刷新扫描（真实计算）</button><a class="btn secondary" href="/">返回目录</a></div>
+  </section>
+  <section class="card">
+    <h2>候选列表</h2>
+    <table id="tbl"><thead><tr><th>代码</th><th>现价</th><th>60日回撤%</th><th>RSI14</th><th>偏离MA20%</th><th>当日反弹%</th><th>成交额(亿)</th><th>评分</th><th>说明</th></tr></thead><tbody></tbody></table>
+  </section>
+</main>
+<script>
+function fmt(n){return Number(n||0).toFixed(2)}
+function render(d){
+  const lg=document.getElementById('logic');
+  const L=d.logic||{};
+  lg.innerHTML=`<li><b>超跌定义：</b>${L.oversold||'-'}</li><li><b>反弹信号：</b>${L.rebound_signal||'-'}</li><li><b>评分规则：</b>${L.score||'-'}</li>`;
+  const tb=document.querySelector('#tbl tbody'); tb.innerHTML='';
+  (d.items||[]).forEach(x=>{const tr=document.createElement('tr'); tr.innerHTML=`<td>${x.code} ${x.name}</td><td>${fmt(x.price)}</td><td>${fmt(x.dd60)}</td><td>${fmt(x.rsi14)}</td><td>${fmt(x.ma20_gap)}</td><td>${fmt(x.rebound_day)}</td><td>${fmt(x.amount)}</td><td>${fmt(x.score)}</td><td>${x.reason}</td>`; tb.appendChild(tr);});
+  if(!(d.items||[]).length){tb.innerHTML='<tr><td colspan="9" style="text-align:center">当前无满足条件标的</td></tr>'}
+}
+async function refreshData(){const res=await fetch('/api/oversold-rebound'); const j=await res.json(); if(!res.ok||!j.ok){alert(j.message||'刷新失败');return;} render(j.data)}
+refreshData();
+</script>
+</body></html>

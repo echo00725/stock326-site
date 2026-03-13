@@ -1,0 +1,78 @@
+<!doctype html>
+<html lang="zh-CN"><head>
+  <meta charset="UTF-8" /><meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>短线排名与行业资金流</title>
+  <link rel="stylesheet" href="/static/style.css" />
+  <link rel="stylesheet" href="/static/dark.css" />
+</head><body>
+<main class="container">
+  <h1>⚡ 短线排名 + 行业资金流入</h1>
+  <p id="updatedAt" class="sub">更新时间：{{ data.updated_at }}</p>
+  <p id="calcStatus" class="sub">计算状态：{{ '真实计算结果' if data.picks|length>0 else '暂无有效结果' }}</p>
+
+  <section class="card">
+    <h2>策略说明</h2>
+    <ul>
+      <li><strong>策略名：</strong>{{ data.strategy.name }}</li>
+      <li><strong>核心逻辑：</strong>{{ data.strategy.principle }}</li>
+      <li><strong>风险提示：</strong>{{ data.strategy.risk_note }}</li>
+    </ul>
+    <div style="display:flex;gap:8px;flex-wrap:wrap">
+      <button class="btn" onclick="runNow()">立即刷新（真实计算）</button>
+      <a class="btn secondary" href="/">返回目录</a>
+    </div>
+  </section>
+
+  <section class="card" id="industrySection">
+    <h2>今日行业资金流入 Top10（含领涨股）</h2>
+    {% if data.industry_flow|length == 0 %}<p>暂无行业资金流数据</p>{% else %}
+      <ul>{% for it in data.industry_flow %}<li>{{ loop.index }}. {{ it.industry }} | 净流入: {{ it.net_inflow }}亿 | 领涨: {{ it['领涨股'] }} ({{ it['领涨股-涨跌幅'] }}%)</li>{% endfor %}</ul>
+    {% endif %}
+  </section>
+
+  <section class="card" id="picksSection">
+    <h2>今日短线参考排名</h2>
+    {% if data.picks|length == 0 %}<p>暂无数据，点击刷新生成。</p>{% endif %}
+    {% for p in data.picks %}
+    <article class="pick"><div class="head"><h3>{{ loop.index }}. {{ p.name }}（{{ p.code }}）</h3><span class="score">总分：{{ p.score }}</span></div><p>最新价：¥{{ p.close }}</p><ul>{% for r in p.reasons %}<li>{{ r }}</li>{% endfor %}</ul></article>
+    {% endfor %}
+  </section>
+</main>
+<script>
+function renderPicks(data){
+  if(!data) return;
+  const sec = document.getElementById('picksSection');
+  const picks = data.picks || [];
+  let html = '<h2>今日短线参考排名</h2>';
+  if(!picks.length){ html += '<p>暂无数据，点击刷新生成。</p>'; }
+  else { picks.forEach((p,idx)=>{ html += `<article class="pick"><div class="head"><h3>${idx+1}. ${p.name}（${p.code}）</h3><span class="score">总分：${p.score}</span></div><p>最新价：¥${p.close}</p><ul>${(p.reasons||[]).map(r=>`<li>${r}</li>`).join('')}</ul></article>`; }); }
+  sec.innerHTML = html;
+
+  const indSec = document.getElementById('industrySection');
+  const ind = data.industry_flow || [];
+  let ihtml = '<h2>今日行业资金流入 Top10（含领涨股）</h2>';
+  if(!ind.length) ihtml += '<p>暂无行业资金流数据</p>';
+  else ihtml += '<ul>' + ind.map((it,idx)=>`<li>${idx+1}. ${it.industry} | 净流入: ${it.net_inflow}亿 | 领涨: ${it['领涨股']} (${it['领涨股-涨跌幅']}%)</li>`).join('') + '</ul>';
+  indSec.innerHTML = ihtml;
+  if(data.updated_at) document.getElementById('updatedAt').innerText = `更新时间：${data.updated_at}`;
+}
+async function runNow(){
+  const btn=document.querySelector('.btn'); const old=btn.innerText; btn.disabled=true; btn.innerText='刷新中...';
+  try{
+    const res=await fetch('/api/run-now'); const data=await res.json();
+    if(!res.ok||data.ok===false){
+      const msg=data.message||`刷新失败（HTTP ${res.status}）`;
+      document.getElementById('calcStatus').innerText=`计算状态：失败（${msg}）`;
+      document.getElementById('picksSection').innerHTML=`<h2>今日短线参考排名</h2><p style='color:#f87171'>本次真实计算失败，结果未更新。原因：${msg}</p>`;
+      return;
+    }
+    document.getElementById('calcStatus').innerText='计算状态：真实计算成功';
+    renderPicks(data.data);
+  }catch(e){
+    const msg='真实数据源连接异常，请稍后重试';
+    document.getElementById('calcStatus').innerText=`计算状态：失败（${msg}）`;
+    document.getElementById('picksSection').innerHTML=`<h2>今日短线参考排名</h2><p style='color:#f87171'>本次真实计算失败，结果未更新。原因：${msg}</p>`;
+  }finally{btn.disabled=false;btn.innerText=old;}
+}
+</script>
+</body></html>

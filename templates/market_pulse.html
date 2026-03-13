@@ -1,0 +1,25 @@
+<!doctype html>
+<html lang="zh-CN"><head>
+<meta charset="UTF-8"/><meta name="viewport" content="width=device-width,initial-scale=1"/>
+<title>市场脉搏</title>
+<link rel="stylesheet" href="/static/style.css"/><link rel="stylesheet" href="/static/dark.css"/>
+</head><body>
+<main class="container">
+  <h1>🌡️ 市场脉搏</h1>
+  <p id="ts" class="sub">更新时间：--</p>
+  <section class="card"><h2>全市场概览</h2><div id="stats"></div><div style="margin-top:8px"><button class="btn" onclick="refreshPulse()">刷新</button><a class="btn secondary" href="/">返回目录</a></div></section>
+  <section class="card"><h2>当日涨幅领先</h2><table id="tbl"><thead><tr><th>代码</th><th>现价</th><th>涨跌幅%</th></tr></thead><tbody></tbody></table></section>
+</main>
+<script>
+function fmt(n){return Number(n||0).toFixed(2)}
+function render(d){
+ document.getElementById('ts').innerText='更新时间：'+(d.updated_at||'--');
+ const s=d.stats||{};
+ document.getElementById('stats').innerHTML=`上涨 ${s.up||0} | 下跌 ${s.down||0} | 平盘 ${s.flat||0} | 总数 ${s.total||0} | 成交额 ${fmt(s.amount_total)} 亿`;
+ const tb=document.querySelector('#tbl tbody'); tb.innerHTML='';
+ (d.leaders||[]).forEach(x=>{const tr=document.createElement('tr'); tr.innerHTML=`<td>${x.code} ${x.name}</td><td>${fmt(x.price)}</td><td>${fmt(x.chg)}</td>`; tb.appendChild(tr)})
+}
+async function refreshPulse(){const res=await fetch('/api/market-pulse');const j=await res.json(); if(!res.ok||!j.ok){alert(j.message||'失败');return;} render(j.data)}
+refreshPulse();
+</script>
+</body></html>

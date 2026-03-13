@@ -1,0 +1,12 @@
+body{background:#0b1220!important;color:#dbe7ff!important}
+.container{max-width:1200px}
+.card,.topbar,.panel,.pick{background:#111a2e!important;border:1px solid #223052!important;color:#dbe7ff!important;box-shadow:none!important}
+.sub,.muted{color:#8ea3d6!important}
+a{color:#9cc1ff}
+.btn{background:#2563eb!important}
+.btn.secondary{background:#334155!important}
+.score{background:#123a24!important;color:#5df29d!important}
+input,select,textarea{background:#0e1628!important;color:#e6eeff!important;border:1px solid #2a3d69!important}
+table{width:100%;border-collapse:collapse}
+th,td{border-bottom:1px solid #243457;padding:8px 6px;text-align:right}
+th:first-child,td:first-child{text-align:left}

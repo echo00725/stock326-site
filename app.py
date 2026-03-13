@@ -228,6 +228,90 @@ def _real_rankings() -> dict:
     }
 
 
+def _rsi14(closes: list[float]) -> float:
+    if len(closes) < 15:
+        return 50.0
+    gains, losses = [], []
+    for i in range(-14, 0):
+        d = closes[i] - closes[i - 1]
+        gains.append(max(d, 0))
+        losses.append(max(-d, 0))
+    avg_gain = sum(gains) / 14
+    avg_loss = sum(losses) / 14
+    if avg_loss == 0:
+        return 100.0
+    rs = avg_gain / avg_loss
+    return 100 - 100 / (1 + rs)
+
+
+def _oversold_rebound_scan() -> dict:
+    now = _cn_now().strftime("%Y-%m-%d %H:%M:%S")
+    uni = _fetch_universe_realtime(limit_pages=2)[:80]
+    rows = []
+    for u in uni:
+        code = u["code"]
+        try:
+            kl = _fetch_daily_kline(code, lmt=80)
+            if len(kl) < 40:
+                continue
+            closes = [x["close"] for x in kl]
+            highs = [x["high"] for x in kl]
+            c = closes[-1]
+            high60 = max(highs[-60:])
+            ma20 = sum(closes[-20:]) / 20
+            dd60 = (c / high60 - 1) * 100 if high60 > 0 else 0
+            rsi = _rsi14(closes)
+            ma_gap = (c / ma20 - 1) * 100 if ma20 > 0 else 0
+            rebound = (closes[-1] / closes[-2] - 1) * 100 if closes[-2] > 0 else 0
+
+            is_oversold = (dd60 <= -25) and (rsi <= 35) and (ma_gap <= -8)
+            if not is_oversold:
+                continue
+            score = min(100, max(0, 45 + (-dd60 - 25) * 0.8 + (35 - rsi) * 1.1 + max(rebound, 0) * 2.5 + math.log(max(u['amount'], 1)) * 0.2))
+            rows.append(
+                {
+                    "code": code,
+                    "name": u["name"],
+                    "price": round(c, 2),
+                    "dd60": round(dd60, 2),
+                    "rsi14": round(rsi, 2),
+                    "ma20_gap": round(ma_gap, 2),
+                    "rebound_day": round(rebound, 2),
+                    "turnover": round(u["turnover"], 2),
+                    "amount": round(u["amount"] / 1e8, 2),
+                    "score": round(score, 2),
+                    "reason": f"60日回撤{dd60:.1f}%, RSI14={rsi:.1f}, 偏离MA20={ma_gap:.1f}%",
+                }
+            )
+        except Exception:
+            continue
+    rows.sort(key=lambda x: x["score"], reverse=True)
+    return {
+        "updated_at": now,
+        "logic": {
+            "oversold": "60日回撤<=-25% 且 RSI14<=35 且 收盘较MA20偏离<=-8%",
+            "rebound_signal": "当日反弹幅度、成交额、换手率参与加权",
+            "score": "score=回撤因子+RSI因子+当日反弹+流动性因子，范围0-100",
+        },
+        "items": rows[:30],
+    }
+
+
+def _market_pulse() -> dict:
+    now = _cn_now().strftime("%Y-%m-%d %H:%M:%S")
+    uni = _fetch_universe_realtime(limit_pages=2)
+    up = sum(1 for x in uni if x["chg"] > 0)
+    down = sum(1 for x in uni if x["chg"] < 0)
+    flat = len(uni) - up - down
+    amt = sum(x["amount"] for x in uni) / 1e8
+    top_up = sorted(uni, key=lambda x: x["chg"], reverse=True)[:10]
+    return {
+        "updated_at": now,
+        "stats": {"up": up, "down": down, "flat": flat, "total": len(uni), "amount_total": round(amt, 2)},
+        "leaders": [{"code":x["code"],"name":x["name"],"chg":round(x["chg"],2),"price":x["price"]} for x in top_up],
+    }
+
+
 def run_daily_job():
     out = _real_rankings()
     if not out.get("picks"):
@@ -576,6 +660,11 @@ def _build_signal_row(symbol: str, name: str, step: int, replay_mode: bool = Fal
 
 @app.route("/")
 def index():
+    return render_template("index.html")
+
+
+@app.route("/shortline-dashboard")
+def shortline_dashboard_page():
     global LAST_RECOMMENDATIONS
     data = LAST_RECOMMENDATIONS or load_json(
         DATA_FILE,
@@ -586,7 +675,17 @@ def index():
             "picks": [],
         },
     )
-    return render_template("index.html", data=data)
+    return render_template("shortline_dashboard.html", data=data)
+
+
+@app.route("/oversold-rebound")
+def oversold_rebound_page():
+    return render_template("oversold_rebound.html")
+
+
+@app.route("/market-pulse")
+def market_pulse_page():
+    return render_template("market_pulse.html")
 
 
 @app.route("/validation")
@@ -620,6 +719,22 @@ def api_recommendations():
             },
         )
     )
+
+
+@app.route("/api/oversold-rebound")
+def api_oversold_rebound():
+    try:
+        return jsonify({"ok": True, "data": _oversold_rebound_scan()})
+    except Exception as e:
+        return jsonify({"ok": False, "message": f"超跌扫描失败：{e}"}), 500
+
+
+@app.route("/api/market-pulse")
+def api_market_pulse():
+    try:
+        return jsonify({"ok": True, "data": _market_pulse()})
+    except Exception as e:
+        return jsonify({"ok": False, "message": f"市场脉搏计算失败：{e}"}), 500
 
 
 @app.route("/api/validation")
