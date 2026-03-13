@@ -10,7 +10,11 @@
   <section class="card">
     <h2>筛选逻辑（公开展示）</h2>
     <ul id="logic"></ul>
-    <div style="display:flex;gap:8px;flex-wrap:wrap"><button class="btn" onclick="refreshData()">刷新扫描（真实计算）</button><a class="btn secondary" href="/">返回目录</a></div>
+    <p id="status" class="sub">状态：待刷新</p>
+    <div style="display:flex;gap:8px;flex-wrap:wrap">
+      <button id="btnRefresh" type="button" class="btn">刷新扫描（真实计算）</button>
+      <a class="btn secondary" href="/">返回目录</a>
+    </div>
   </section>
   <section class="card">
     <h2>候选列表</h2>
@@ -19,15 +23,44 @@
 </main>
 <script>
 function fmt(n){return Number(n||0).toFixed(2)}
+function setStatus(t){ const el=document.getElementById('status'); if(el) el.innerText='状态：'+t; }
 function render(d){
   const lg=document.getElementById('logic');
   const L=d.logic||{};
   lg.innerHTML=`<li><b>超跌定义：</b>${L.oversold||'-'}</li><li><b>反弹信号：</b>${L.rebound_signal||'-'}</li><li><b>评分规则：</b>${L.score||'-'}</li>`;
   const tb=document.querySelector('#tbl tbody'); tb.innerHTML='';
-  (d.items||[]).forEach(x=>{const tr=document.createElement('tr'); tr.innerHTML=`<td>${x.code} ${x.name}</td><td>${fmt(x.price)}</td><td>${fmt(x.dd60)}</td><td>${fmt(x.rsi14)}</td><td>${fmt(x.ma20_gap)}</td><td>${fmt(x.rebound_day)}</td><td>${fmt(x.amount)}</td><td>${fmt(x.score)}</td><td>${x.reason}</td>`; tb.appendChild(tr);});
+  (d.items||[]).forEach(x=>{
+    const tr=document.createElement('tr');
+    tr.innerHTML=`<td>${x.code} ${x.name}</td><td>${fmt(x.price)}</td><td>${fmt(x.dd60)}</td><td>${fmt(x.rsi14)}</td><td>${fmt(x.ma20_gap)}</td><td>${fmt(x.rebound_day)}</td><td>${fmt(x.amount)}</td><td>${fmt(x.score)}</td><td>${x.reason}</td>`;
+    tb.appendChild(tr);
+  });
   if(!(d.items||[]).length){tb.innerHTML='<tr><td colspan="9" style="text-align:center">当前无满足条件标的</td></tr>'}
 }
-async function refreshData(){const res=await fetch('/api/oversold-rebound'); const j=await res.json(); if(!res.ok||!j.ok){alert(j.message||'刷新失败');return;} render(j.data)}
-refreshData();
+async function refreshData(){
+  const btn=document.getElementById('btnRefresh');
+  const old=btn.innerText;
+  btn.disabled=true; btn.innerText='刷新中...'; setStatus('刷新中');
+  try{
+    const res=await fetch('/api/oversold-rebound');
+    const j=await res.json();
+    if(!res.ok||!j.ok){
+      setStatus('失败（'+(j.message||('HTTP '+res.status))+')');
+      alert(j.message||'刷新失败');
+      return;
+    }
+    render(j.data);
+    setStatus('刷新成功');
+  }catch(e){
+    setStatus('失败（网络异常）');
+    alert('刷新失败：网络异常');
+  }finally{
+    btn.disabled=false; btn.innerText=old;
+  }
+}
+window.addEventListener('DOMContentLoaded', ()=>{
+  const btn=document.getElementById('btnRefresh');
+  if(btn) btn.addEventListener('click', refreshData);
+  refreshData();
+});
 </script>
 </body></html>
