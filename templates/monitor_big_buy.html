@@ -24,6 +24,7 @@
     .muted{color:#8ea3d6}
     .btn{background:#2563eb}
     .btn.secondary{background:#334155}
+    .clock{position:fixed;left:14px;bottom:10px;color:#9fb4de;font-size:12px;background:#0f1a31;border:1px solid #2a3d69;border-radius:8px;padding:6px 8px}
   </style>
 </head>
 <body>
@@ -84,6 +85,7 @@
     </div>
   </section>
 </main>
+<div id="clock" class="clock">服务器时间 --</div>
 
 <script>
 let current='600519', sortBy='signal_score', step=0;
@@ -108,6 +110,7 @@ async function refreshRank(){
   const q=new URLSearchParams({keyword:kw.value||'',favorites_only:favOnly.checked?'1':'0',step:String(step)});
   const j=await (await fetch('/api/monitor/signals?'+q)).json();
   const arr=(j.data||[]).sort((a,b)=>Number(b[sortBy])-Number(a[sortBy]));
+  if(j.server_time){ document.getElementById('clock').textContent = `服务器时间 ${j.server_time}`; }
   const tb=document.querySelector('#rankTbl tbody'); tb.innerHTML='';
   arr.forEach(x=>{
     const tr=document.createElement('tr');
@@ -134,7 +137,7 @@ function draw(series){
 async function refreshDetail(){
   const j=await (await fetch(`/api/monitor/detail?symbol=${current}&step=${step}`)).json();
   const d=j.data; if(!d) return;
-  detailTitle.textContent=`单股详情：${d.symbol}`;
+  detailTitle.textContent=`单股详情：${d.symbol}（现价 ${Number(d.live_price||0).toFixed(2)}）`;
   const m=d.metrics;
   metrics.innerHTML=`5秒净买入: <b>${fmt(m.m5.net_buy)}</b> ｜10秒净买入: <b>${fmt(m.m10.net_buy)}</b> ｜30秒净买入: <b>${fmt(m.m30.net_buy)}</b> ｜10秒买入强度比: <b>${m.m10.buy_ratio}</b>`;
   draw(d.series_1m||[]);

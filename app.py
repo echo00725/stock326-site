@@ -8,6 +8,7 @@ import random
 from pathlib import Path
 
 import pytz
+import requests
 from apscheduler.schedulers.background import BackgroundScheduler
 from flask import Flask, jsonify, render_template, request
 
@@ -101,6 +102,29 @@ SYMBOL_POOL = [
 ]
 
 
+def _cn_now():
+    return dt.datetime.now(pytz.timezone("Asia/Shanghai"))
+
+
+def _secid(code: str) -> str:
+    return f"1.{code}" if code.startswith(("5", "6", "9")) else f"0.{code}"
+
+
+def _fetch_spot_price(symbol: str) -> float:
+    # 东财实时快照，f43 为最新价*100
+    url = "https://push2.eastmoney.com/api/qt/stock/get"
+    params = {
+        "secid": _secid(symbol),
+        "fields": "f43",
+        "ut": "fa5fd1943c7b386f172d6893dbfba10b",
+    }
+    r = requests.get(url, params=params, timeout=4)
+    r.raise_for_status()
+    raw = ((r.json().get("data") or {}).get("f43")) or 0
+    px = float(raw) / 100 if raw else 0.0
+    return px if px > 0 else 0.0
+
+
 _ALLOWED_AST = {
     ast.Expression,
     ast.BinOp,
@@ -146,11 +170,11 @@ def _safe_eval_formula(expr: str, vars_map: dict) -> float:
     return float(value)
 
 
-def _gen_trades(symbol: str, step: int = 0, seconds: int = 70):
+def _gen_trades(symbol: str, step: int = 0, seconds: int = 70, base_price: float | None = None):
     seed = int(symbol) + int(step)
     rng = random.Random(seed)
-    base = 20 + (int(symbol[-2:]) % 100) * 0.35
-    now = dt.datetime.now()
+    base = base_price if (base_price and base_price > 0) else 20 + (int(symbol[-2:]) % 100) * 0.35
+    now = _cn_now()
     trades = []
     last_price = base
     for i in range(seconds * 2):  # 每0.5秒一笔
@@ -235,7 +259,12 @@ def _metrics(trades, threshold=300000):
 
 
 def _build_signal_row(symbol: str, name: str, step: int):
-    trades = _gen_trades(symbol, step=step)
+    live_price = 0.0
+    try:
+        live_price = _fetch_spot_price(symbol)
+    except Exception:
+        live_price = 0.0
+    trades = _gen_trades(symbol, step=step, base_price=live_price)
     met = _metrics(trades, threshold=MONITOR_CFG["big_trade_threshold"])
     m10 = met["m10"]
     vars_map = {
@@ -258,7 +287,7 @@ def _build_signal_row(symbol: str, name: str, step: int):
     return {
         "symbol": symbol,
         "name": name,
-        "price": met["last_price"],
+        "price": round(live_price if live_price > 0 else met["last_price"], 2),
         "big_buy_count_10s": m10["big_buy_count"],
         "big_buy_amount_10s": m10["big_buy_amount"],
         "big_sell_amount_10s": m10["big_sell_amount"],
@@ -381,14 +410,20 @@ def api_monitor_signals():
         rows = [x for x in rows if x["symbol"] in fav]
 
     rows.sort(key=lambda x: x["signal_score"], reverse=True)
-    return jsonify({"ok": True, "data": rows, "ts": dt.datetime.now().strftime("%H:%M:%S")})
+    now = _cn_now()
+    return jsonify({"ok": True, "data": rows, "ts": now.strftime("%H:%M:%S"), "server_time": now.strftime("%Y-%m-%d %H:%M:%S")})
 
 
 @app.route("/api/monitor/detail")
 def api_monitor_detail():
     symbol = (request.args.get("symbol") or "600519").strip()
     step = int(request.args.get("step", "0") or 0)
-    trades = _gen_trades(symbol, step=step, seconds=90)
+    live_price = 0.0
+    try:
+        live_price = _fetch_spot_price(symbol)
+    except Exception:
+        live_price = 0.0
+    trades = _gen_trades(symbol, step=step, seconds=90, base_price=live_price)
     met = _metrics(trades, threshold=MONITOR_CFG["big_trade_threshold"])
 
     # 最近1分钟序列
@@ -406,6 +441,7 @@ def api_monitor_detail():
             "ok": True,
             "data": {
                 "symbol": symbol,
+                "live_price": round(live_price if live_price > 0 else met.get("last_price", 0), 2),
                 "metrics": met,
                 "series_1m": series,
                 "big_trades": big_list,
