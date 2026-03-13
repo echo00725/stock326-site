@@ -68,9 +68,13 @@
       try {
         const res = await fetch('/api/run-now');
         const data = await res.json();
+        if (!res.ok || data.ok === false) {
+          alert(data.message || `刷新失败（HTTP ${res.status}）`);
+          return;
+        }
         alert(data.message || '已刷新');
         location.reload();
-      } catch (e) { alert('刷新失败，请稍后重试'); }
+      } catch (e) { alert('刷新失败：真实数据源连接异常，请稍后重试'); }
       finally { btn.disabled = false; btn.innerText = oldText; }
     }
   </script>

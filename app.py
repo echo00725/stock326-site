@@ -40,7 +40,13 @@ def _rq_get(url: str, params: dict, timeout: int = 8):
     # 尽量绕过宿主代理，降低 Eastmoney 连接被代理中断概率
     os.environ.setdefault("NO_PROXY", "*")
     os.environ.setdefault("no_proxy", "*")
-    return requests.get(url, params=params, timeout=timeout, proxies={"http": None, "https": None})
+    last_err = None
+    for i in range(3):
+        try:
+            return requests.get(url, params=params, timeout=timeout, proxies={"http": None, "https": None})
+        except Exception as e:
+            last_err = e
+    raise last_err
 
 
 def fallback_rankings() -> dict:
