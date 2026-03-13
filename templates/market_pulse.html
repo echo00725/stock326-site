@@ -10,6 +10,11 @@
   <p id="status" class="sub">状态：待刷新</p>
 
   <section class="card">
+    <h2>统计口径</h2>
+    <div id="scope" class="sub">--</div>
+  </section>
+
+  <section class="card">
     <h2>全市场概览</h2>
     <div id="stats">--</div>
     <div style="margin-top:8px;display:flex;gap:8px;flex-wrap:wrap">
@@ -34,6 +39,8 @@ function setStatus(t){ const el=document.getElementById('status'); if(el) el.inn
 function render(d){
   document.getElementById('ts').innerText='更新时间：'+(d.updated_at||'--');
   const s=d.stats||{};
+  const sc=d.scope||{};
+  document.getElementById('scope').innerText = `${sc.name||'统计口径'}：${sc.desc||'-'} | fs=${sc.fs||'-'} | 分页=${sc.limit_pages||0}*${sc.page_size||0}`;
   document.getElementById('stats').innerHTML=`上涨 ${s.up||0} | 下跌 ${s.down||0} | 平盘 ${s.flat||0} | 总数 ${s.total||0} | 成交额 ${fmt(s.amount_total)} 亿`;
   const tb=document.querySelector('#tbl tbody');
   tb.innerHTML='';

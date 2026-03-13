@@ -376,6 +376,13 @@ def _market_pulse() -> dict:
     top_up = sorted(uni, key=lambda x: x["chg"], reverse=True)[:10]
     return {
         "updated_at": now,
+        "scope": {
+            "name": "当前统计口径",
+            "fs": "m:0 t:6,m:0 t:80,m:1 t:2,m:1 t:23",
+            "desc": "东财A股口径（沪深主板/中小/创业/科创），暂未并入北交所",
+            "limit_pages": 30,
+            "page_size": 200,
+        },
         "stats": {"up": up, "down": down, "flat": flat, "total": len(uni), "amount_total": round(amt, 2)},
         "leaders": [{"code":x["code"],"name":x["name"],"chg":round(x["chg"],2),"price":x["price"]} for x in top_up],
     }
