@@ -1,0 +1,12 @@
+flask>=3.0
+pandas>=2.2
+numpy>=2.0
+akshare>=1.18.38
+apscheduler>=3.10
+pytz>=2024.1
+matplotlib>=3.9
+feedparser>=6.0
+deep-translator>=1.11
+# 可选：BERT中文金融情绪模型（云部署默认不装，避免构建过慢/失败）
+# transformers>=4.44
+# torch>=2.3

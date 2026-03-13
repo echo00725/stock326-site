@@ -1,0 +1,111 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>A股成交量价位分布</title>
+  <link rel="stylesheet" href="/static/style.css" />
+  <style>
+    .row { display:flex; gap:8px; align-items:center; flex-wrap:wrap; }
+    .input { padding:8px 10px; border:1px solid #d1d5db; border-radius:8px; min-width:220px; }
+    .muted { color:#6b7280; font-size:14px; }
+    .chart-wrap { margin-top:12px; }
+    .bar-line { display:grid; grid-template-columns: 70px 1fr 110px; gap:8px; align-items:center; margin:6px 0; }
+    .bar-track { background:#eef2ff; border-radius:6px; height:18px; overflow:hidden; }
+    .bar { background:#2563eb; height:100%; }
+    .price { font-variant-numeric: tabular-nums; }
+    .vol { text-align:right; font-variant-numeric: tabular-nums; }
+  </style>
+</head>
+<body>
+  <main class="container">
+    <h1>📊 A股成交量价位分布（步长0.01）</h1>
+    <p class="sub">按最近N个交易日分钟数据聚合，支持成交量与成交额（步长0.01）</p>
+
+    <section class="card">
+      <div class="row">
+        <input id="symbol" class="input" placeholder="输入6位代码，如 600519" value="600519" />
+        <select id="days" class="input" style="min-width:140px">
+          <option value="1">最近1个交易日</option>
+          <option value="2">最近2个交易日</option>
+          <option value="5">最近5个交易日</option>
+          <option value="10">最近10个交易日</option>
+          <option value="20">最近20个交易日</option>
+          <option value="30">最近30个交易日</option>
+        </select>
+        <select id="metric" class="input" style="min-width:120px">
+          <option value="volume">横轴: 成交量</option>
+          <option value="amount">横轴: 成交额</option>
+        </select>
+        <button class="btn" onclick="loadData()">查询</button>
+        <a class="btn secondary" href="/">返回首页</a>
+      </div>
+      <p id="meta" class="muted"></p>
+      <p id="err" style="color:#b91c1c"></p>
+      <div id="chart" class="chart-wrap"></div>
+    </section>
+  </main>
+
+  <script>
+    function fmtNum(n){ return Number(n||0).toLocaleString('zh-CN'); }
+
+    function renderChart(profile, metric){
+      const box = document.getElementById('chart');
+      box.innerHTML = '';
+      if(!profile || profile.length===0){
+        box.innerHTML = '<p class="muted">暂无成交明细数据</p>';
+        return;
+      }
+      const maxVal = Math.max(...profile.map(x=>Number(x[metric]||0)));
+      const rows = [...profile].sort((a,b)=>b.price-a.price);
+      rows.forEach(r=>{
+        const line = document.createElement('div');
+        line.className = 'bar-line';
+        const val = Number(r[metric] || 0);
+        const width = maxVal ? (val / maxVal * 100) : 0;
+        line.innerHTML = `
+          <div class="price">${r.price.toFixed(2)}</div>
+          <div class="bar-track"><div class="bar" style="width:${width}%"></div></div>
+          <div class="vol">${fmtNum(val)}</div>
+        `;
+        box.appendChild(line);
+      });
+    }
+
+    async function loadData(){
+      const symbol = document.getElementById('symbol').value.trim();
+      const days = document.getElementById('days').value;
+      const metric = document.getElementById('metric').value;
+      const err = document.getElementById('err');
+      const meta = document.getElementById('meta');
+      const chart = document.getElementById('chart');
+      err.textContent = '';
+      meta.textContent = '加载中...';
+      chart.innerHTML = '';
+      if(!/^\d{6}$/.test(symbol)){
+        err.textContent = '请输入6位A股代码';
+        meta.textContent = '';
+        return;
+      }
+      try{
+        const res = await fetch(`/api/volume-profile?symbol=${symbol}&days=${days}`);
+        const json = await res.json();
+        if(!res.ok || !json.ok){
+          throw new Error(json.error || '获取失败');
+        }
+        const d = json.data;
+        const pocText = metric === 'amount'
+          ? (d.poc_by_amount?.toFixed(2) ?? '-')
+          : (d.poc_by_volume?.toFixed(2) ?? '-');
+        meta.textContent = `代码: ${d.symbol} | 区间: ${d.start_date} ~ ${d.end_date} (${d.range_days}日) | 总成交量: ${fmtNum(d.total_volume)} 股 | 总成交额: ${fmtNum(d.total_amount)} | POC(${metric==='amount'?'额':'量'}): ${pocText} | 数据源: ${d.source}`;
+        renderChart(d.profile, metric);
+      }catch(e){
+        meta.textContent = '';
+        err.textContent = e.message || '获取失败';
+      }
+    }
+
+    loadData();
+  </script>
+</body>
+</html>

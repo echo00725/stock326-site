@@ -1,0 +1,69 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>24小时新闻雷达</title>
+  <link rel="stylesheet" href="/static/style.css"/>
+  <style>
+    .ticker-wrap{overflow:hidden;background:#111827;color:#fff;border-radius:10px;padding:8px 0;margin:12px 0}
+    .ticker{display:inline-block;white-space:nowrap;animation:ticker 35s linear infinite}
+    @keyframes ticker{from{transform:translateX(100%)}to{transform:translateX(-100%)}}
+    .tabs a{margin-right:8px}
+    .news-item{padding:10px;border-bottom:1px solid #eee}
+    .news-item a{font-weight:600;color:#0f172a;text-decoration:none}
+    .muted{color:#64748b;font-size:13px}
+  </style>
+</head>
+<body>
+  <main class="container">
+    <h1>📰 24小时新闻雷达</h1>
+    <p class="sub">更新时间：{{ data.updated_at }}</p>
+    <div class="tabs">
+      <a class="btn secondary" href="#cn">中国新闻</a>
+      <a class="btn secondary" href="#global">国际新闻</a>
+      <a class="btn" href="/">返回选股首页</a>
+    </div>
+
+    <div class="ticker-wrap"><div class="ticker">{% for s in data.cn %}{% for i in s['items'][:2] %}【{{ s.source }}】{{ i.title }} &nbsp;&nbsp;&nbsp;{% endfor %}{% endfor %}{% for s in data.global_news %}{% for i in s['items'][:2] %}【{{ s.source }}】{{ i.title }} &nbsp;&nbsp;&nbsp;{% endfor %}{% endfor %}</div></div>
+
+    <section id="cn" class="card">
+      <h2>中国（5个源）</h2>
+      {% for s in data.cn %}
+      <h3>{{ s.source }}</h3>
+      {% for i in s['items'] %}
+      <div class="news-item">
+        <a href="{{ i.link }}" target="_blank">{{ i.title_zh or i.title }}</a>
+        {% if i.title_zh and i.title_zh != i.title %}
+        <div class="muted">原文标题：{{ i.title }}</div>
+        {% endif %}
+        <div>{{ i.abstract }}</div>
+        <div class="muted">影响标签：<strong>{{ i.impact }}</strong>{% if i.events %} ｜ 事件类型：{{ i.events|join('、') }}{% endif %}{% if i.sectors %} ｜ 影响板块：{{ i.sectors|join('、') }}{% endif %}</div>
+        <div class="muted">{{ i.trading_hint }}</div>
+        <div class="muted"><a href="{{ i.link }}" target="_blank">源链接</a></div>
+      </div>
+      {% endfor %}
+      {% endfor %}
+    </section>
+
+    <section id="global" class="card">
+      <h2>国际（5个源）</h2>
+      {% for s in data.global_news %}
+      <h3>{{ s.source }}</h3>
+      {% for i in s['items'] %}
+      <div class="news-item">
+        <a href="{{ i.link }}" target="_blank">{{ i.title_zh or i.title }}</a>
+        {% if i.title_zh and i.title_zh != i.title %}
+        <div class="muted">原文标题：{{ i.title }}</div>
+        {% endif %}
+        <div>{{ i.abstract }}</div>
+        <div class="muted">影响标签：<strong>{{ i.impact }}</strong>{% if i.events %} ｜ 事件类型：{{ i.events|join('、') }}{% endif %}{% if i.sectors %} ｜ 影响板块：{{ i.sectors|join('、') }}{% endif %}</div>
+        <div class="muted">{{ i.trading_hint }}</div>
+        <div class="muted"><a href="{{ i.link }}" target="_blank">源链接</a></div>
+      </div>
+      {% endfor %}
+      {% endfor %}
+    </section>
+  </main>
+</body>
+</html>

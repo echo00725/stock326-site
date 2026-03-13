@@ -1,0 +1,76 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>策略验证页</title>
+  <link rel="stylesheet" href="/static/style.css" />
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+</head>
+<body>
+  <main class="container">
+    <h1>🧪 策略验证页</h1>
+    <p class="sub">更新时间：{{ data.updated_at }}</p>
+
+    <section class="card">
+      <h2>回测摘要</h2>
+      <ul>
+        <li>年化收益：{{ '%.2f'|format(data.summary.annualized_return * 100) }}%</li>
+        <li>最大回撤：{{ '%.2f'|format(data.summary.max_drawdown * 100) }}%</li>
+        <li>胜率：{{ '%.2f'|format(data.summary.win_rate * 100) }}%</li>
+        <li>样本天数：{{ data.summary.sample_days }}</li>
+      </ul>
+      <p>{{ data.note }}</p>
+      <button class="btn" onclick="runValidation()">立即更新回测</button>
+      <a class="btn secondary" href="/">返回首页</a>
+    </section>
+
+    <section class="card">
+      <h2>回测曲线</h2>
+      <canvas id="equityChart" height="90"></canvas>
+    </section>
+
+    <section class="card">
+      <h2>因子归因（与收益相关系数）</h2>
+      <ul>
+        {% for k,v in data.factor_attribution.items() %}
+        <li>{{ k }}: {{ '%.4f'|format(v) }}</li>
+        {% endfor %}
+      </ul>
+    </section>
+
+    <section class="card">
+      <h2>最近30天实盘跟踪（策略组合日收益）</h2>
+      <ul>
+        {% for row in data.recent_30d_tracking %}
+        <li>{{ row.date }} | 日收益 {{ '%.2f'|format(row.ret*100) }}% | 净值 {{ '%.4f'|format(row.equity) }}</li>
+        {% endfor %}
+      </ul>
+    </section>
+  </main>
+
+  <script>
+    const eqData = {{ data.equity_curve|tojson }};
+    const labels = eqData.map(x => x.date);
+    const vals = eqData.map(x => x.equity);
+    new Chart(document.getElementById('equityChart'), {
+      type: 'line',
+      data: { labels, datasets: [{ label: '策略净值', data: vals, borderColor: '#2563eb', fill: false }] },
+      options: { responsive: true, scales: { y: { beginAtZero: false } } }
+    });
+
+    async function runValidation() {
+      const btn = document.querySelector('.btn');
+      const old = btn.innerText;
+      btn.disabled = true; btn.innerText = '回测中...';
+      try {
+        const res = await fetch('/api/run-validation');
+        const d = await res.json();
+        alert(d.message || '完成');
+        location.reload();
+      } catch (e) { alert('回测失败'); }
+      finally { btn.disabled = false; btn.innerText = old; }
+    }
+  </script>
+</body>
+</html>

@@ -1,0 +1,11 @@
+{
+  "updated_at": "2026-03-12 22:19:07",
+  "strategy": {
+    "name": "A股全市场短线交易参考排名",
+    "version": "3.0",
+    "principle": "数据源异常降级",
+    "risk_note": "仅供研究"
+  },
+  "industry_flow": [],
+  "picks": []
+}
