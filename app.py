@@ -244,54 +244,77 @@ def _rsi14(closes: list[float]) -> float:
     return 100 - 100 / (1 + rs)
 
 
-def _oversold_rebound_scan() -> dict:
-    now = _cn_now().strftime("%Y-%m-%d %H:%M:%S")
-    uni = _fetch_universe_realtime(limit_pages=30)
+def _fetch_universe_fast_full() -> list[dict]:
+    # 全市场快速版：12页*500≈6000，仅用快照字段，避免函数超时
     rows = []
-    for u in uni:
-        code = u["code"]
-        try:
-            kl = _fetch_daily_kline(code, lmt=80)
-            if len(kl) < 40:
-                continue
-            closes = [x["close"] for x in kl]
-            highs = [x["high"] for x in kl]
-            c = closes[-1]
-            high60 = max(highs[-60:])
-            ma20 = sum(closes[-20:]) / 20
-            dd60 = (c / high60 - 1) * 100 if high60 > 0 else 0
-            rsi = _rsi14(closes)
-            ma_gap = (c / ma20 - 1) * 100 if ma20 > 0 else 0
-            rebound = (closes[-1] / closes[-2] - 1) * 100 if closes[-2] > 0 else 0
-
-            is_oversold = (dd60 <= -25) and (rsi <= 35) and (ma_gap <= -8)
-            if not is_oversold:
-                continue
-            score = min(100, max(0, 45 + (-dd60 - 25) * 0.8 + (35 - rsi) * 1.1 + max(rebound, 0) * 2.5 + math.log(max(u['amount'], 1)) * 0.2))
+    for pn in range(1, 13):
+        url = "https://push2.eastmoney.com/api/qt/clist/get"
+        params = {
+            "pn": pn,
+            "pz": 500,
+            "po": 1,
+            "np": 1,
+            "fltt": 2,
+            "invt": 2,
+            "fid": "f6",
+            "fs": "m:0 t:6,m:0 t:80,m:1 t:2,m:1 t:23",
+            "fields": "f12,f14,f2,f3,f6,f8,f24,f25",
+            "ut": "fa5fd1943c7b386f172d6893dbfba10b",
+        }
+        r = _rq_get(url, params=params, timeout=6)
+        r.raise_for_status()
+        diff = ((r.json().get("data") or {}).get("diff")) or []
+        for d in diff:
             rows.append(
                 {
-                    "code": code,
-                    "name": u["name"],
-                    "price": round(c, 2),
-                    "dd60": round(dd60, 2),
-                    "rsi14": round(rsi, 2),
-                    "ma20_gap": round(ma_gap, 2),
-                    "rebound_day": round(rebound, 2),
-                    "turnover": round(u["turnover"], 2),
-                    "amount": round(u["amount"] / 1e8, 2),
-                    "score": round(score, 2),
-                    "reason": f"60日回撤{dd60:.1f}%, RSI14={rsi:.1f}, 偏离MA20={ma_gap:.1f}%",
+                    "code": str(d.get("f12") or ""),
+                    "name": str(d.get("f14") or ""),
+                    "price": float(d.get("f2") or 0),
+                    "chg": float(d.get("f3") or 0),
+                    "amount": float(d.get("f6") or 0),
+                    "turnover": float(d.get("f8") or 0),
+                    "chg60": float(d.get("f24") or 0),
+                    "ytd": float(d.get("f25") or 0),
                 }
             )
-        except Exception:
+    return [x for x in rows if len(x["code"]) == 6 and x["price"] > 0 and x["amount"] > 0]
+
+
+def _oversold_rebound_scan() -> dict:
+    now = _cn_now().strftime("%Y-%m-%d %H:%M:%S")
+    uni = _fetch_universe_fast_full()
+    rows = []
+    for u in uni:
+        dd60 = u["chg60"]  # 近60日涨跌幅(%)，负值越小越超跌
+        rebound = u["chg"]
+        turnover = u["turnover"]
+        # 全市场快照口径：用60日跌幅+当日反弹+换手近似替代复杂慢指标
+        is_oversold = dd60 <= -25
+        if not is_oversold:
             continue
+        score = min(100, max(0, 55 + (-dd60 - 25) * 0.9 + max(rebound, 0) * 2.5 + min(turnover, 20) * 0.8 + math.log(max(u["amount"], 1)) * 0.15))
+        rows.append(
+            {
+                "code": u["code"],
+                "name": u["name"],
+                "price": round(u["price"], 2),
+                "dd60": round(dd60, 2),
+                "rsi14": 0,
+                "ma20_gap": 0,
+                "rebound_day": round(rebound, 2),
+                "turnover": round(turnover, 2),
+                "amount": round(u["amount"] / 1e8, 2),
+                "score": round(score, 2),
+                "reason": f"60日涨跌幅{dd60:.1f}%，当日{rebound:.1f}%，换手{turnover:.1f}%",
+            }
+        )
     rows.sort(key=lambda x: x["score"], reverse=True)
     return {
         "updated_at": now,
         "logic": {
-            "oversold": "60日回撤<=-25% 且 RSI14<=35 且 收盘较MA20偏离<=-8%",
-            "rebound_signal": "当日反弹幅度、成交额、换手率参与加权",
-            "score": "score=回撤因子+RSI因子+当日反弹+流动性因子，范围0-100",
+            "oversold": "全市场快照口径：60日涨跌幅<=-25% 认定超跌",
+            "rebound_signal": "当日涨跌幅、换手率、成交额参与反弹评分",
+            "score": "score=超跌深度+当日反弹+换手+流动性，范围0-100（快速全市场版）",
         },
         "items": rows[:30],
     }
