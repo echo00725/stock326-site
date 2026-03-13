@@ -178,61 +178,74 @@ def _safe_eval_formula(expr: str, vars_map: dict) -> float:
     return float(value)
 
 
-def _gen_trades(symbol: str, step: int = 0, seconds: int = 70, base_price: float | None = None):
-    seed = int(symbol) + int(step)
-    rng = random.Random(seed)
-    base = base_price if (base_price and base_price > 0) else 20 + (int(symbol[-2:]) % 100) * 0.35
-    now = _cn_now()
-    trades = []
-    last_price = base
-    for i in range(seconds * 2):  # 每0.5秒一笔
-        t = now - dt.timedelta(seconds=(seconds - i * 0.5))
-        drift = rng.uniform(-0.03, 0.04)
-        last_price = round(max(1, last_price + drift), 2)
-        bid1 = round(last_price - 0.01, 2)
-        ask1 = round(last_price + 0.01, 2)
-        vol_hand = rng.choice([2, 3, 5, 8, 12, 20, 50, 100])
-        if rng.random() < 0.1:
-            vol_hand *= rng.choice([20, 30, 50])  # 大单
-
-        side_hint = rng.random()
-        if side_hint > 0.62:
-            trade_price = ask1
-        elif side_hint < 0.38:
-            trade_price = bid1
-        else:
-            trade_price = last_price
-
-        amount = trade_price * vol_hand * 100
-        trades.append(
-            {
-                "ts": t.strftime("%H:%M:%S.%f")[:-3],
-                "price": trade_price,
-                "volume_hand": vol_hand,
-                "bid1": bid1,
-                "ask1": ask1,
-                "amount": round(amount, 2),
-            }
-        )
-    return trades
+def _fetch_quote_snapshot(symbol: str) -> dict:
+    # f11=buy1, f19=sell1, 价格单位*1000(部分字段)；f43最新价*100
+    url = "https://push2.eastmoney.com/api/qt/stock/get"
+    params = {
+        "secid": _secid(symbol),
+        "fields": "f43,f11,f19",
+        "ut": "fa5fd1943c7b386f172d6893dbfba10b",
+    }
+    r = requests.get(url, params=params, timeout=5)
+    r.raise_for_status()
+    d = r.json().get("data") or {}
+    last = float(d.get("f43") or 0) / 100
+    bid1 = float(d.get("f11") or 0) / 1000
+    ask1 = float(d.get("f19") or 0) / 1000
+    return {"last": last, "bid1": bid1, "ask1": ask1}
 
 
-def _classify(trade, prev_price):
+def _fetch_tick_details(symbol: str, n: int = 200) -> list[dict]:
+    url = "https://push2.eastmoney.com/api/qt/stock/details/get"
+    params = {
+        "secid": _secid(symbol),
+        "fields1": "f1,f2,f3,f4",
+        "fields2": "f51,f52,f53,f54,f55",
+        "pos": f"-{max(20, min(n, 2000))}",
+        "ut": "fa5fd1943c7b386f172d6893dbfba10b",
+    }
+    r = requests.get(url, params=params, timeout=8)
+    r.raise_for_status()
+    details = ((r.json().get("data") or {}).get("details")) or []
+    out = []
+    for line in details:
+        parts = str(line).split(",")
+        if len(parts) < 3:
+            continue
+        t = parts[0]
+        price = float(parts[1]) if parts[1] else 0.0
+        vol = float(parts[2]) if parts[2] else 0.0  # 手
+        bs = int(parts[4]) if len(parts) > 4 and parts[4].isdigit() else 0
+        out.append({"ts": t, "price": price, "volume_hand": vol, "bs": bs})
+    return out
+
+
+def _classify(trade, prev_price, bid1, ask1):
     p = trade["price"]
-    if p >= trade["ask1"]:
+    if ask1 > 0 and p >= ask1:
         return "buy"
-    if p <= trade["bid1"]:
+    if bid1 > 0 and p <= bid1:
         return "sell"
-    return "buy" if p >= prev_price else "sell"
+    # tick rule补充
+    if p > prev_price:
+        return "buy"
+    if p < prev_price:
+        return "sell"
+    # 价格相同再用成交明细方向(2买/1卖)补充
+    if trade.get("bs") == 2:
+        return "buy"
+    if trade.get("bs") == 1:
+        return "sell"
+    return "unknown"
 
 
-def _metrics(trades, threshold=300000):
+def _metrics(trades, threshold=300000, bid1=0.0, ask1=0.0):
     if not trades:
         return {}
     # 补side
     prev = trades[0]["price"]
     for x in trades:
-        x["side"] = _classify(x, prev)
+        x["side"] = _classify(x, prev, bid1=bid1, ask1=ask1)
         prev = x["price"]
         x["is_big"] = x["amount"] >= threshold
 
@@ -267,13 +280,20 @@ def _metrics(trades, threshold=300000):
 
 
 def _build_signal_row(symbol: str, name: str, step: int):
-    live_price = 0.0
     try:
-        live_price = _fetch_spot_price(symbol)
+        q = _fetch_quote_snapshot(symbol)
+        live_price = q.get("last") or 0.0
+        bid1 = q.get("bid1") or 0.0
+        ask1 = q.get("ask1") or 0.0
+        ticks = _fetch_tick_details(symbol, n=220)
     except Exception:
-        live_price = 0.0
-    trades = _gen_trades(symbol, step=step, base_price=live_price)
-    met = _metrics(trades, threshold=MONITOR_CFG["big_trade_threshold"])
+        return None
+
+    trades = []
+    for x in ticks:
+        amount = x["price"] * x["volume_hand"] * 100
+        trades.append({**x, "bid1": bid1, "ask1": ask1, "amount": round(amount, 2)})
+    met = _metrics(trades, threshold=MONITOR_CFG["big_trade_threshold"], bid1=bid1, ask1=ask1)
     m10 = met["m10"]
     vars_map = {
         "big_buy_count_10s": m10["big_buy_count"],
@@ -423,6 +443,7 @@ def api_monitor_signals():
         })
 
     rows = [_build_signal_row(s, n, step=step) for s, n in SYMBOL_POOL]
+    rows = [x for x in rows if x]
 
     if keyword:
         rows = [x for x in rows if keyword in x["symbol"] or keyword in x["name"]]
@@ -431,7 +452,7 @@ def api_monitor_signals():
         rows = [x for x in rows if x["symbol"] in fav]
 
     rows.sort(key=lambda x: x["signal_score"], reverse=True)
-    return jsonify({"ok": True, "data": rows, "market_open": True, "ts": now.strftime("%H:%M:%S"), "server_time": now.strftime("%Y-%m-%d %H:%M:%S")})
+    return jsonify({"ok": True, "data": rows, "market_open": True, "source": "eastmoney_realtime", "ts": now.strftime("%H:%M:%S"), "server_time": now.strftime("%Y-%m-%d %H:%M:%S")})
 
 
 @app.route("/api/monitor/detail")
@@ -441,11 +462,14 @@ def api_monitor_detail():
     replay_mode = (request.args.get("replay") or "0") == "1"
     now = _cn_now()
 
-    live_price = 0.0
+    q = {"last": 0.0, "bid1": 0.0, "ask1": 0.0}
     try:
-        live_price = _fetch_spot_price(symbol)
+        q = _fetch_quote_snapshot(symbol)
     except Exception:
-        live_price = 0.0
+        pass
+    live_price = q.get("last") or 0.0
+    bid1 = q.get("bid1") or 0.0
+    ask1 = q.get("ask1") or 0.0
 
     if not _is_market_open(now) and not replay_mode:
         return jsonify(
@@ -463,8 +487,29 @@ def api_monitor_detail():
             }
         )
 
-    trades = _gen_trades(symbol, step=step, seconds=90, base_price=live_price)
-    met = _metrics(trades, threshold=MONITOR_CFG["big_trade_threshold"])
+    try:
+        ticks = _fetch_tick_details(symbol, n=260)
+    except Exception:
+        return jsonify({
+            "ok": True,
+            "data": {
+                "symbol": symbol,
+                "live_price": round(live_price, 2),
+                "source": "eastmoney_realtime",
+                "metrics": {"m5": {"net_buy": 0, "buy_ratio": 1}, "m10": {"net_buy": 0, "buy_ratio": 1}, "m30": {"net_buy": 0, "buy_ratio": 1}},
+                "series_1m": [],
+                "big_trades": [],
+                "market_open": True,
+                "message": "真实逐笔接口暂时不可用，请稍后重试。",
+            },
+        })
+
+    trades = []
+    for x in ticks:
+        amount = x["price"] * x["volume_hand"] * 100
+        trades.append({**x, "bid1": bid1, "ask1": ask1, "amount": round(amount, 2)})
+
+    met = _metrics(trades, threshold=MONITOR_CFG["big_trade_threshold"], bid1=bid1, ask1=ask1)
 
     # 最近1分钟序列
     arr = trades[-120:]
@@ -482,6 +527,8 @@ def api_monitor_detail():
             "data": {
                 "symbol": symbol,
                 "live_price": round(live_price if live_price > 0 else met.get("last_price", 0), 2),
+                "source": "eastmoney_realtime",
+                "quote": {"bid1": bid1, "ask1": ask1},
                 "metrics": met,
                 "series_1m": series,
                 "big_trades": big_list,
