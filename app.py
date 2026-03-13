@@ -220,6 +220,64 @@ def _fetch_tick_details(symbol: str, n: int = 200) -> list[dict]:
     return out
 
 
+def _tick_cache_file(symbol: str) -> Path:
+    d = _cn_now().strftime("%Y-%m-%d")
+    return Path(__file__).parent / "data" / "tick_cache" / d / f"{symbol}.jsonl"
+
+
+def _append_tick_cache(symbol: str, ticks: list[dict], bid1: float, ask1: float):
+    p = _tick_cache_file(symbol)
+    try:
+        p.parent.mkdir(parents=True, exist_ok=True)
+        now = _cn_now().strftime("%Y-%m-%d")
+        lines = []
+        for x in ticks:
+            rec = {
+                "date": now,
+                "ts": x.get("ts"),
+                "price": x.get("price"),
+                "volume_hand": x.get("volume_hand"),
+                "bs": x.get("bs", 0),
+                "bid1": bid1,
+                "ask1": ask1,
+            }
+            lines.append(json.dumps(rec, ensure_ascii=False))
+        if lines:
+            with p.open("a", encoding="utf-8") as f:
+                f.write("\n".join(lines) + "\n")
+    except OSError:
+        return
+
+
+def _load_tick_cache(symbol: str) -> list[dict]:
+    p = _tick_cache_file(symbol)
+    if not p.exists():
+        return []
+    out = []
+    try:
+        with p.open("r", encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    out.append(json.loads(line))
+                except Exception:
+                    continue
+    except OSError:
+        return []
+    # 去重（按时间+价+量）并保持顺序
+    seen = set()
+    dedup = []
+    for x in out:
+        k = f"{x.get('ts')}_{x.get('price')}_{x.get('volume_hand')}"
+        if k in seen:
+            continue
+        seen.add(k)
+        dedup.append(x)
+    return dedup
+
+
 def _classify(trade, prev_price, bid1, ask1):
     p = trade["price"]
     if ask1 > 0 and p >= ask1:
@@ -279,19 +337,37 @@ def _metrics(trades, threshold=300000, bid1=0.0, ask1=0.0):
     return {"m5": m5, "m10": m10, "m30": m30, "price_change_10s": round(chg10, 4), "last_price": p1}
 
 
-def _build_signal_row(symbol: str, name: str, step: int):
+def _build_signal_row(symbol: str, name: str, step: int, replay_mode: bool = False):
     try:
         q = _fetch_quote_snapshot(symbol)
         live_price = q.get("last") or 0.0
         bid1 = q.get("bid1") or 0.0
         ask1 = q.get("ask1") or 0.0
-        ticks = _fetch_tick_details(symbol, n=220)
+    except Exception:
+        live_price, bid1, ask1 = 0.0, 0.0, 0.0
+
+    try:
+        if replay_mode:
+            ticks = _load_tick_cache(symbol)
+            if not ticks:
+                return None
+            # step 控制回放窗口推进
+            if step > 0 and len(ticks) > 120:
+                cut = max(120, min(len(ticks), 120 + step))
+                ticks = ticks[:cut]
+            bid1 = float(ticks[-1].get("bid1") or bid1 or 0)
+            ask1 = float(ticks[-1].get("ask1") or ask1 or 0)
+            if live_price <= 0:
+                live_price = float(ticks[-1].get("price") or 0)
+        else:
+            ticks = _fetch_tick_details(symbol, n=220)
+            _append_tick_cache(symbol, ticks, bid1, ask1)
     except Exception:
         return None
 
     trades = []
     for x in ticks:
-        amount = x["price"] * x["volume_hand"] * 100
+        amount = float(x["price"]) * float(x["volume_hand"]) * 100
         trades.append({**x, "bid1": bid1, "ask1": ask1, "amount": round(amount, 2)})
     met = _metrics(trades, threshold=MONITOR_CFG["big_trade_threshold"], bid1=bid1, ask1=ask1)
     m10 = met["m10"]
@@ -442,7 +518,7 @@ def api_monitor_signals():
             "server_time": now.strftime("%Y-%m-%d %H:%M:%S"),
         })
 
-    rows = [_build_signal_row(s, n, step=step) for s, n in SYMBOL_POOL]
+    rows = [_build_signal_row(s, n, step=step, replay_mode=replay_mode) for s, n in SYMBOL_POOL]
     rows = [x for x in rows if x]
 
     if keyword:
@@ -452,7 +528,7 @@ def api_monitor_signals():
         rows = [x for x in rows if x["symbol"] in fav]
 
     rows.sort(key=lambda x: x["signal_score"], reverse=True)
-    return jsonify({"ok": True, "data": rows, "market_open": True, "source": "eastmoney_realtime", "ts": now.strftime("%H:%M:%S"), "server_time": now.strftime("%Y-%m-%d %H:%M:%S")})
+    return jsonify({"ok": True, "data": rows, "market_open": True, "source": "eastmoney_replay_cache" if replay_mode else "eastmoney_realtime", "ts": now.strftime("%H:%M:%S"), "server_time": now.strftime("%Y-%m-%d %H:%M:%S")})
 
 
 @app.route("/api/monitor/detail")
@@ -488,7 +564,32 @@ def api_monitor_detail():
         )
 
     try:
-        ticks = _fetch_tick_details(symbol, n=260)
+        if replay_mode:
+            ticks = _load_tick_cache(symbol)
+            if not ticks:
+                return jsonify({
+                    "ok": True,
+                    "data": {
+                        "symbol": symbol,
+                        "live_price": round(live_price, 2),
+                        "source": "eastmoney_replay_cache",
+                        "metrics": {"m5": {"net_buy": 0, "buy_ratio": 1}, "m10": {"net_buy": 0, "buy_ratio": 1}, "m30": {"net_buy": 0, "buy_ratio": 1}},
+                        "series_1m": [],
+                        "big_trades": [],
+                        "market_open": False,
+                        "message": "暂无真实回放缓存（请先在盘中运行采集）。",
+                    },
+                })
+            if step > 0 and len(ticks) > 120:
+                cut = max(120, min(len(ticks), 120 + step))
+                ticks = ticks[:cut]
+            bid1 = float(ticks[-1].get("bid1") or bid1 or 0)
+            ask1 = float(ticks[-1].get("ask1") or ask1 or 0)
+            if live_price <= 0:
+                live_price = float(ticks[-1].get("price") or 0)
+        else:
+            ticks = _fetch_tick_details(symbol, n=260)
+            _append_tick_cache(symbol, ticks, bid1, ask1)
     except Exception:
         return jsonify({
             "ok": True,
@@ -527,7 +628,7 @@ def api_monitor_detail():
             "data": {
                 "symbol": symbol,
                 "live_price": round(live_price if live_price > 0 else met.get("last_price", 0), 2),
-                "source": "eastmoney_realtime",
+                "source": "eastmoney_replay_cache" if replay_mode else "eastmoney_realtime",
                 "quote": {"bid1": bid1, "ask1": ask1},
                 "metrics": met,
                 "series_1m": series,
