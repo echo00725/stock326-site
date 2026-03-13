@@ -4,6 +4,7 @@ import ast
 import datetime as dt
 import json
 import math
+import os
 import random
 from pathlib import Path
 
@@ -35,6 +36,13 @@ def save_json(path: Path, data: dict):
         return
 
 
+def _rq_get(url: str, params: dict, timeout: int = 8):
+    # 尽量绕过宿主代理，降低 Eastmoney 连接被代理中断概率
+    os.environ.setdefault("NO_PROXY", "*")
+    os.environ.setdefault("no_proxy", "*")
+    return requests.get(url, params=params, timeout=timeout, proxies={"http": None, "https": None})
+
+
 def fallback_rankings() -> dict:
     now = dt.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     picks = [
@@ -59,9 +67,131 @@ def fallback_rankings() -> dict:
 
 
 # ====== 短线排名 ======
+def _fetch_universe_realtime(limit_pages: int = 2) -> list[dict]:
+    # 东财全市场快照：按成交额降序取前若干页
+    rows = []
+    for pn in range(1, limit_pages + 1):
+        url = "https://push2.eastmoney.com/api/qt/clist/get"
+        params = {
+            "pn": pn,
+            "pz": 80,
+            "po": 1,
+            "np": 1,
+            "fltt": 2,
+            "invt": 2,
+            "fid": "f6",  # 成交额排序
+            "fs": "m:0 t:6,m:0 t:80,m:1 t:2,m:1 t:23",  # 沪深A
+            "fields": "f12,f14,f2,f3,f6,f8,f15,f16,f17,f18",
+            "ut": "fa5fd1943c7b386f172d6893dbfba10b",
+        }
+        r = _rq_get(url, params=params, timeout=8)
+        r.raise_for_status()
+        diff = ((r.json().get("data") or {}).get("diff")) or []
+        for d in diff:
+            code = str(d.get("f12") or "")
+            name = str(d.get("f14") or "")
+            if len(code) != 6:
+                continue
+            rows.append(
+                {
+                    "code": code,
+                    "name": name,
+                    "price": float(d.get("f2") or 0),
+                    "chg": float(d.get("f3") or 0),
+                    "amount": float(d.get("f6") or 0),
+                    "turnover": float(d.get("f8") or 0),
+                    "high": float(d.get("f15") or 0),
+                    "low": float(d.get("f16") or 0),
+                    "open": float(d.get("f17") or 0),
+                    "preclose": float(d.get("f18") or 0),
+                }
+            )
+    return [x for x in rows if x["price"] > 0 and x["amount"] > 0]
+
+
+def _fetch_daily_kline(code: str, lmt: int = 70) -> list[dict]:
+    url = "https://push2his.eastmoney.com/api/qt/stock/kline/get"
+    params = {
+        "secid": _secid(code),
+        "ut": "fa5fd1943c7b386f172d6893dbfba10b",
+        "fields1": "f1,f2,f3,f4,f5,f6",
+        "fields2": "f51,f52,f53,f54,f55,f56,f57,f58,f59,f60,f61",
+        "klt": 101,  # 日线
+        "fqt": 1,
+        "lmt": lmt,
+        "end": "20500000",
+    }
+    r = _rq_get(url, params=params, timeout=8)
+    r.raise_for_status()
+    kl = ((r.json().get("data") or {}).get("klines")) or []
+    out = []
+    for s in kl:
+        p = str(s).split(",")
+        if len(p) < 6:
+            continue
+        out.append({"date": p[0], "open": float(p[1]), "close": float(p[2]), "high": float(p[3]), "low": float(p[4]), "amount": float(p[5])})
+    return out
+
+
+def _real_rankings() -> dict:
+    now = _cn_now().strftime("%Y-%m-%d %H:%M:%S")
+    universe = _fetch_universe_realtime(limit_pages=2)  # 实时成交额前160
+    scored = []
+    for u in universe[:30]:
+        code = u["code"]
+        try:
+            kl = _fetch_daily_kline(code, lmt=70)
+            if len(kl) < 30:
+                continue
+            closes = [x["close"] for x in kl]
+            highs = [x["high"] for x in kl]
+            c = closes[-1]
+            m5 = sum(closes[-5:]) / 5
+            m20 = sum(closes[-20:]) / 20
+            mom20 = (c / closes[-21] - 1) * 100 if closes[-21] > 0 else 0
+            breakout20 = (c / max(highs[-20:]) - 1) * 100 if max(highs[-20:]) > 0 else 0
+            intraday = u["chg"]
+            liquidity = math.log(max(u["amount"], 1))
+            trend = 1 if m5 > m20 else -1
+            score = (
+                35 * trend
+                + 1.6 * mom20
+                + 1.2 * intraday
+                + 12 * breakout20
+                + 0.8 * liquidity
+            )
+            reasons = [
+                f"20日动量 {mom20:.2f}%",
+                f"当日涨跌 {intraday:.2f}%",
+                f"M5{'>' if trend>0 else '<='}M20",
+                f"成交额 {u['amount']:.0f}",
+            ]
+            scored.append({"code": code, "name": u["name"], "score": round(score, 2), "close": round(c, 2), "reasons": reasons})
+        except Exception:
+            continue
+
+    scored.sort(key=lambda x: x["score"], reverse=True)
+    picks = scored[:20]
+    return {
+        "updated_at": now,
+        "strategy": {
+            "name": "A股全市场短线交易参考排名",
+            "version": "4.0-real",
+            "principle": "基于东财实时全A成交额筛选 + 日线动量/趋势/突破/流动性真实计算",
+            "risk_note": "仅供研究",
+        },
+        "industry_flow": [],
+        "picks": picks,
+    }
+
+
 def run_daily_job():
-    # 默认轻量可用：秒级返回，保证线上稳定；需要全量策略时再开环境变量
-    out = fallback_rankings()
+    try:
+        out = _real_rankings()
+        if not out.get("picks"):
+            raise RuntimeError("empty")
+    except Exception:
+        out = fallback_rankings()
     save_json(DATA_FILE, out)
     return out
 
@@ -126,7 +256,7 @@ def _fetch_spot_price(symbol: str) -> float:
         "fields": "f43",
         "ut": "fa5fd1943c7b386f172d6893dbfba10b",
     }
-    r = requests.get(url, params=params, timeout=4)
+    r = _rq_get(url, params=params, timeout=4)
     r.raise_for_status()
     raw = ((r.json().get("data") or {}).get("f43")) or 0
     px = float(raw) / 100 if raw else 0.0
@@ -186,7 +316,7 @@ def _fetch_quote_snapshot(symbol: str) -> dict:
         "fields": "f43,f11,f19",
         "ut": "fa5fd1943c7b386f172d6893dbfba10b",
     }
-    r = requests.get(url, params=params, timeout=5)
+    r = _rq_get(url, params=params, timeout=5)
     r.raise_for_status()
     d = r.json().get("data") or {}
     last = float(d.get("f43") or 0) / 100
@@ -204,7 +334,7 @@ def _fetch_tick_details(symbol: str, n: int = 200) -> list[dict]:
         "pos": f"-{max(20, min(n, 2000))}",
         "ut": "fa5fd1943c7b386f172d6893dbfba10b",
     }
-    r = requests.get(url, params=params, timeout=8)
+    r = _rq_get(url, params=params, timeout=8)
     r.raise_for_status()
     details = ((r.json().get("data") or {}).get("details")) or []
     out = []
