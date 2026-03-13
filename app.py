@@ -291,33 +291,45 @@ def _fetch_universe_fast_full() -> tuple[list[dict], int, int]:
 def _oversold_rebound_scan() -> dict:
     now = _cn_now().strftime("%Y-%m-%d %H:%M:%S")
     uni, ok_pages, total_pages = _fetch_universe_fast_full()
-    rows = []
-    for u in uni:
-        dd60 = u["chg60"]  # 近60日涨跌幅(%)，负值越小越超跌
-        rebound = u["chg"]
-        turnover = u["turnover"]
-        is_oversold = dd60 <= -25
-        if not is_oversold:
-            continue
-        score = min(100, max(0, 55 + (-dd60 - 25) * 0.9 + max(rebound, 0) * 2.5 + min(turnover, 20) * 0.8 + math.log(max(u["amount"], 1)) * 0.15))
-        rows.append(
-            {
-                "code": u["code"],
-                "name": u["name"],
-                "price": round(u["price"], 2),
-                "dd60": round(dd60, 2),
-                "rsi14": None,
-                "ma20_gap": None,
-                "rebound_day": round(rebound, 2),
-                "turnover": round(turnover, 2),
-                "amount": round(u["amount"] / 1e8, 2),
-                "score": round(score, 2),
-                "reason": f"60日涨跌幅{dd60:.1f}%，当日{rebound:.1f}%，换手{turnover:.1f}%",
-            }
-        )
+
+    def build_rows(dd_threshold: float):
+        out = []
+        for u in uni:
+            dd60 = u["chg60"]  # 近60日涨跌幅(%)，负值越小越超跌
+            rebound = u["chg"]
+            turnover = u["turnover"]
+            if dd60 > dd_threshold:
+                continue
+            score = min(100, max(0, 55 + (-dd60 - abs(dd_threshold)) * 0.9 + max(rebound, 0) * 2.5 + min(turnover, 20) * 0.8 + math.log(max(u["amount"], 1)) * 0.15))
+            out.append(
+                {
+                    "code": u["code"],
+                    "name": u["name"],
+                    "price": round(u["price"], 2),
+                    "dd60": round(dd60, 2),
+                    "rsi14": None,
+                    "ma20_gap": None,
+                    "rebound_day": round(rebound, 2),
+                    "turnover": round(turnover, 2),
+                    "amount": round(u["amount"] / 1e8, 2),
+                    "score": round(score, 2),
+                    "reason": f"60日涨跌幅{dd60:.1f}%，当日{rebound:.1f}%，换手{turnover:.1f}%",
+                }
+            )
+        out.sort(key=lambda x: x["score"], reverse=True)
+        return out
+
+    # 先严格，再逐级放宽，保证至少10只
+    rows = build_rows(-25)
+    used_threshold = -25
+    if len(rows) < 10:
+        rows = build_rows(-20)
+        used_threshold = -20
+    if len(rows) < 10:
+        rows = build_rows(-15)
+        used_threshold = -15
 
     # 第二阶段：仅对候选前120补算日线指标，避免全市场逐只拉K导致超时
-    rows.sort(key=lambda x: x["score"], reverse=True)
     enrich_n = min(120, len(rows))
     for i in range(enrich_n):
         x = rows[i]
@@ -339,7 +351,7 @@ def _oversold_rebound_scan() -> dict:
     return {
         "updated_at": now,
         "logic": {
-            "oversold": "全市场快照口径：60日涨跌幅<=-25% 认定超跌；候选再补算RSI14与MA20偏离",
+            "oversold": f"全市场快照口径：60日涨跌幅<={used_threshold}% 认定超跌（不足10只会自动放宽阈值）",
             "rebound_signal": "当日涨跌幅、换手率、成交额参与反弹评分",
             "score": "score=超跌深度+当日反弹+换手+流动性，范围0-100（两段式）",
         },
@@ -350,7 +362,7 @@ def _oversold_rebound_scan() -> dict:
             "note": "若ok_pages小于total_pages，通常是数据源限流/反爬导致部分分片失败",
             "enriched_candidates": enrich_n,
         },
-        "items": rows[:30],
+        "items": rows[:10],
     }
 
 
