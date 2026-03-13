@@ -18,6 +18,7 @@ app.json.ensure_ascii = False
 
 DATA_FILE = Path(__file__).parent / "data" / "latest_recommendations.json"
 VALIDATION_FILE = Path(__file__).parent / "data" / "validation.json"
+LAST_RECOMMENDATIONS = None
 
 
 # ====== 通用 ======
@@ -539,7 +540,8 @@ def _build_signal_row(symbol: str, name: str, step: int, replay_mode: bool = Fal
 
 @app.route("/")
 def index():
-    data = load_json(
+    global LAST_RECOMMENDATIONS
+    data = LAST_RECOMMENDATIONS or load_json(
         DATA_FILE,
         {
             "updated_at": "尚未生成",
@@ -569,8 +571,10 @@ def validation_page():
 
 @app.route("/api/recommendations")
 def api_recommendations():
+    global LAST_RECOMMENDATIONS
     return jsonify(
-        load_json(
+        LAST_RECOMMENDATIONS
+        or load_json(
             DATA_FILE,
             {
                 "updated_at": "尚未生成",
@@ -791,9 +795,11 @@ def api_monitor_detail():
 
 @app.route("/api/run-now")
 def api_run_now():
+    global LAST_RECOMMENDATIONS
     try:
-        run_daily_job()
-        return jsonify({"ok": True, "message": "已刷新短线排名（真实计算）"})
+        out = run_daily_job()
+        LAST_RECOMMENDATIONS = out
+        return jsonify({"ok": True, "message": "已刷新短线排名（真实计算）", "data": out})
     except Exception as e:
         return jsonify({"ok": False, "message": f"真实计算失败：{e}"}), 500
 
