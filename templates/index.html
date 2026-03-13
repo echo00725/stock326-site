@@ -30,14 +30,14 @@
       </div>
     </section>
 
-    <section class="card">
+    <section class="card" id="industrySection">
       <h2>今日行业资金流入 Top10</h2>
       {% if data.industry_flow|length == 0 %}
         <p>暂无行业资金流数据</p>
       {% else %}
       <ul>
         {% for it in data.industry_flow %}
-        <li>{{ loop.index }}. {{ it.industry }} | 净流入: {{ it.net_inflow }} | 领涨: {{ it['领涨股'] }} ({{ it['领涨股-涨跌幅'] }}%)</li>
+        <li>{{ loop.index }}. {{ it.industry }} | 净流入: {{ it.net_inflow }}亿 | 领涨: {{ it['领涨股'] }} ({{ it['领涨股-涨跌幅'] }}%)</li>
         {% endfor %}
       </ul>
       {% endif %}
@@ -74,6 +74,17 @@
         });
       }
       sec.innerHTML = html;
+
+      const indSec = document.getElementById('industrySection');
+      const ind = data.industry_flow || [];
+      let ihtml = '<h2>今日行业资金流入 Top10</h2>';
+      if(!ind.length){
+        ihtml += '<p>暂无行业资金流数据</p>';
+      } else {
+        ihtml += '<ul>' + ind.map((it,idx)=>`<li>${idx+1}. ${it.industry} | 净流入: ${it.net_inflow}亿 | 领涨: ${it['领涨股']} (${it['领涨股-涨跌幅']}%)</li>`).join('') + '</ul>';
+      }
+      indSec.innerHTML = ihtml;
+
       if(data.updated_at) document.getElementById('updatedAt').innerText = `更新时间：${data.updated_at}`;
     }
 

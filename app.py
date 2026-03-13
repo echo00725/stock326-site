@@ -140,6 +140,37 @@ def _fetch_daily_kline(code: str, lmt: int = 70) -> list[dict]:
     return out
 
 
+def _fetch_industry_flow_top10() -> list[dict]:
+    # 东财行业板块资金流，含领涨股字段
+    url = "https://push2.eastmoney.com/api/qt/clist/get"
+    params = {
+        "pn": 1,
+        "pz": 10,
+        "po": 1,
+        "np": 1,
+        "fltt": 2,
+        "invt": 2,
+        "fid": "f62",  # 主力净流入排序
+        "fs": "m:90 t:2",  # 行业板块
+        "fields": "f12,f14,f2,f3,f62,f184,f128,f136",
+        "ut": "fa5fd1943c7b386f172d6893dbfba10b",
+    }
+    r = _rq_get(url, params=params, timeout=8)
+    r.raise_for_status()
+    diff = ((r.json().get("data") or {}).get("diff")) or []
+    out = []
+    for d in diff:
+        out.append(
+            {
+                "industry": str(d.get("f14") or ""),
+                "net_inflow": round(float(d.get("f62") or 0) / 1e8, 2),  # 亿元
+                "领涨股": str(d.get("f128") or "-"),
+                "领涨股-涨跌幅": round(float(d.get("f136") or 0), 2),
+            }
+        )
+    return out
+
+
 def _real_rankings() -> dict:
     now = _cn_now().strftime("%Y-%m-%d %H:%M:%S")
     universe = _fetch_universe_realtime(limit_pages=2)  # 实时成交额前160
@@ -179,15 +210,20 @@ def _real_rankings() -> dict:
 
     scored.sort(key=lambda x: x["score"], reverse=True)
     picks = scored[:20]
+    try:
+        industry_flow = _fetch_industry_flow_top10()
+    except Exception:
+        industry_flow = []
+
     return {
         "updated_at": now,
         "strategy": {
             "name": "A股全市场短线交易参考排名",
-            "version": "4.0-real",
-            "principle": "基于东财实时全A成交额筛选 + 日线动量/趋势/突破/流动性真实计算",
+            "version": "4.1-real",
+            "principle": "基于东财实时全A成交额筛选 + 日线动量/趋势/突破/流动性真实计算 + 行业主力净流入Top10",
             "risk_note": "仅供研究",
         },
-        "industry_flow": [],
+        "industry_flow": industry_flow,
         "picks": picks,
     }
 
