@@ -5,6 +5,8 @@ from datetime import datetime
 
 import pandas as pd
 import requests
+from requests.adapters import HTTPAdapter
+from urllib3.util.retry import Retry
 
 
 def _norm_symbol(symbol: str) -> str:
@@ -63,10 +65,46 @@ def _build_profile(df: pd.DataFrame, price_col: str, volume_col: str, amount_col
     }
 
 
+def _session() -> requests.Session:
+    s = requests.Session()
+    retry = Retry(
+        total=3,
+        connect=3,
+        read=3,
+        backoff_factor=0.6,
+        status_forcelist=(429, 500, 502, 503, 504),
+        allowed_methods=("GET",),
+    )
+    adapter = HTTPAdapter(max_retries=retry)
+    s.mount("http://", adapter)
+    s.mount("https://", adapter)
+    s.headers.update(
+        {
+            "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122 Safari/537.36",
+            "Referer": "https://quote.eastmoney.com/",
+            "Accept": "application/json,text/plain,*/*",
+        }
+    )
+    return s
+
+
+def _parse_rows(lines) -> pd.DataFrame:
+    rows = []
+    for line in lines or []:
+        parts = str(line).split(",")
+        if len(parts) < 7:
+            continue
+        t, _open, close, _high, _low, vol, amt = parts[:7]
+        rows.append({"time": t, "price": close, "volume": vol, "amount": amt})
+    return pd.DataFrame(rows)
+
+
 def _fetch_eastmoney_trends(code: str) -> pd.DataFrame:
-    # 返回近5日 1分钟数据，字段格式："YYYY-MM-DD HH:MM,open,close,high,low,volume,amount,avg"
-    url = "https://push2his.eastmoney.com/api/qt/stock/trends2/get"
-    params = {
+    s = _session()
+
+    # 主接口：trends2
+    url1 = "https://push2his.eastmoney.com/api/qt/stock/trends2/get"
+    p1 = {
         "fields1": "f1,f2,f3,f4,f5,f6,f7,f8,f9,f10,f11,f12,f13",
         "fields2": "f51,f52,f53,f54,f55,f56,f57,f58",
         "ut": "7eea3edcaed734bea9cbfc24409ed989",
@@ -74,21 +112,34 @@ def _fetch_eastmoney_trends(code: str) -> pd.DataFrame:
         "iscr": 0,
         "secid": _secid(code),
     }
-    r = requests.get(url, params=params, timeout=12)
-    r.raise_for_status()
-    j = r.json()
-    data = (j.get("data") or {}).get("trends") or []
-    if not data:
-        return pd.DataFrame()
+    try:
+        r1 = s.get(url1, params=p1, timeout=15)
+        r1.raise_for_status()
+        j1 = r1.json()
+        df = _parse_rows((j1.get("data") or {}).get("trends") or [])
+        if not df.empty:
+            return df
+    except Exception:
+        pass
 
-    rows = []
-    for line in data:
-        parts = str(line).split(",")
-        if len(parts) < 7:
-            continue
-        t, _open, close, _high, _low, vol, amt = parts[:7]
-        rows.append({"time": t, "price": close, "volume": vol, "amount": amt})
-    return pd.DataFrame(rows)
+    # 备用接口：kline 分钟线
+    url2 = "https://push2his.eastmoney.com/api/qt/stock/kline/get"
+    p2 = {
+        "secid": _secid(code),
+        "ut": "fa5fd1943c7b386f172d6893dbfba10b",
+        "fields1": "f1,f2,f3,f4,f5,f6",
+        "fields2": "f51,f52,f53,f54,f55,f56,f57,f58,f59,f60,f61",
+        "klt": 1,
+        "fqt": 0,
+        "lmt": 20000,
+        "end": "20500000",
+    }
+    r2 = s.get(url2, params=p2, timeout=15)
+    r2.raise_for_status()
+    j2 = r2.json()
+    klines = ((j2.get("data") or {}).get("klines")) or []
+    df2 = _parse_rows(klines)
+    return df2
 
 
 def get_volume_profile(symbol: str, days: int = 1) -> dict:
