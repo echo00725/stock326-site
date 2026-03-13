@@ -27,7 +27,8 @@ function setStatus(t){ const el=document.getElementById('status'); if(el) el.inn
 function render(d){
   const lg=document.getElementById('logic');
   const L=d.logic||{};
-  lg.innerHTML=`<li><b>超跌定义：</b>${L.oversold||'-'}</li><li><b>反弹信号：</b>${L.rebound_signal||'-'}</li><li><b>评分规则：</b>${L.score||'-'}</li>`;
+  const S=d.scan_info||{};
+  lg.innerHTML=`<li><b>超跌定义：</b>${L.oversold||'-'}</li><li><b>反弹信号：</b>${L.rebound_signal||'-'}</li><li><b>评分规则：</b>${L.score||'-'}</li><li><b>扫描覆盖：</b>${S.scanned_stocks||0} 只（分片 ${S.ok_pages||0}/${S.total_pages||0}）</li><li><b>稳定性提示：</b>${S.note||'-'}</li>`;
   const tb=document.querySelector('#tbl tbody'); tb.innerHTML='';
   (d.items||[]).forEach(x=>{
     const tr=document.createElement('tr');

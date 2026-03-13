@@ -244,10 +244,12 @@ def _rsi14(closes: list[float]) -> float:
     return 100 - 100 / (1 + rs)
 
 
-def _fetch_universe_fast_full() -> list[dict]:
-    # 全市场快速版：12页*500≈6000，仅用快照字段，避免函数超时
+def _fetch_universe_fast_full() -> tuple[list[dict], int, int]:
+    # 全市场快速版：分片抓取；遇到反爬/超时时跳过失败分片，保证接口能返回
     rows = []
-    for pn in range(1, 13):
+    ok_pages = 0
+    total_pages = 12
+    for pn in range(1, total_pages + 1):
         url = "https://push2.eastmoney.com/api/qt/clist/get"
         params = {
             "pn": pn,
@@ -261,9 +263,14 @@ def _fetch_universe_fast_full() -> list[dict]:
             "fields": "f12,f14,f2,f3,f6,f8,f24,f25",
             "ut": "fa5fd1943c7b386f172d6893dbfba10b",
         }
-        r = _rq_get(url, params=params, timeout=6)
-        r.raise_for_status()
-        diff = ((r.json().get("data") or {}).get("diff")) or []
+        try:
+            # 此处不用重试，避免单次刷新卡住
+            r = requests.get(url, params=params, timeout=2.5, proxies={"http": None, "https": None})
+            r.raise_for_status()
+            diff = ((r.json().get("data") or {}).get("diff")) or []
+            ok_pages += 1
+        except Exception:
+            continue
         for d in diff:
             rows.append(
                 {
@@ -277,12 +284,13 @@ def _fetch_universe_fast_full() -> list[dict]:
                     "ytd": float(d.get("f25") or 0),
                 }
             )
-    return [x for x in rows if len(x["code"]) == 6 and x["price"] > 0 and x["amount"] > 0]
+    filtered = [x for x in rows if len(x["code"]) == 6 and x["price"] > 0 and x["amount"] > 0]
+    return filtered, ok_pages, total_pages
 
 
 def _oversold_rebound_scan() -> dict:
     now = _cn_now().strftime("%Y-%m-%d %H:%M:%S")
-    uni = _fetch_universe_fast_full()
+    uni, ok_pages, total_pages = _fetch_universe_fast_full()
     rows = []
     for u in uni:
         dd60 = u["chg60"]  # 近60日涨跌幅(%)，负值越小越超跌
@@ -315,6 +323,12 @@ def _oversold_rebound_scan() -> dict:
             "oversold": "全市场快照口径：60日涨跌幅<=-25% 认定超跌",
             "rebound_signal": "当日涨跌幅、换手率、成交额参与反弹评分",
             "score": "score=超跌深度+当日反弹+换手+流动性，范围0-100（快速全市场版）",
+        },
+        "scan_info": {
+            "ok_pages": ok_pages,
+            "total_pages": total_pages,
+            "scanned_stocks": len(uni),
+            "note": "若ok_pages小于total_pages，通常是数据源限流/反爬导致部分分片失败",
         },
         "items": rows[:30],
     }
