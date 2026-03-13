@@ -74,14 +74,14 @@ def fallback_rankings() -> dict:
 
 
 # ====== 短线排名 ======
-def _fetch_universe_realtime(limit_pages: int = 2) -> list[dict]:
-    # 东财全市场快照：按成交额降序取前若干页
+def _fetch_universe_realtime(limit_pages: int = 30) -> list[dict]:
+    # 东财全市场快照：默认拉取全市场（30页 * 200 = 6000）
     rows = []
     for pn in range(1, limit_pages + 1):
         url = "https://push2.eastmoney.com/api/qt/clist/get"
         params = {
             "pn": pn,
-            "pz": 80,
+            "pz": 200,
             "po": 1,
             "np": 1,
             "fltt": 2,
@@ -173,7 +173,7 @@ def _fetch_industry_flow_top10() -> list[dict]:
 
 def _real_rankings() -> dict:
     now = _cn_now().strftime("%Y-%m-%d %H:%M:%S")
-    universe = _fetch_universe_realtime(limit_pages=2)  # 实时成交额前160
+    universe = _fetch_universe_realtime(limit_pages=30)  # 全市场
     scored = []
     for u in universe[:30]:
         code = u["code"]
@@ -246,7 +246,7 @@ def _rsi14(closes: list[float]) -> float:
 
 def _oversold_rebound_scan() -> dict:
     now = _cn_now().strftime("%Y-%m-%d %H:%M:%S")
-    uni = _fetch_universe_realtime(limit_pages=2)[:80]
+    uni = _fetch_universe_realtime(limit_pages=30)
     rows = []
     for u in uni:
         code = u["code"]
@@ -299,7 +299,7 @@ def _oversold_rebound_scan() -> dict:
 
 def _market_pulse() -> dict:
     now = _cn_now().strftime("%Y-%m-%d %H:%M:%S")
-    uni = _fetch_universe_realtime(limit_pages=2)
+    uni = _fetch_universe_realtime(limit_pages=30)
     up = sum(1 for x in uni if x["chg"] > 0)
     down = sum(1 for x in uni if x["chg"] < 0)
     flat = len(uni) - up - down
