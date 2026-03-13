@@ -7,19 +7,71 @@
 <main class="container">
   <h1>🌡️ 市场脉搏</h1>
   <p id="ts" class="sub">更新时间：--</p>
-  <section class="card"><h2>全市场概览</h2><div id="stats"></div><div style="margin-top:8px"><button class="btn" onclick="refreshPulse()">刷新</button><a class="btn secondary" href="/">返回目录</a></div></section>
-  <section class="card"><h2>当日涨幅领先</h2><table id="tbl"><thead><tr><th>代码</th><th>现价</th><th>涨跌幅%</th></tr></thead><tbody></tbody></table></section>
+  <p id="status" class="sub">状态：待刷新</p>
+
+  <section class="card">
+    <h2>全市场概览</h2>
+    <div id="stats">--</div>
+    <div style="margin-top:8px;display:flex;gap:8px;flex-wrap:wrap">
+      <button id="btnRefresh" type="button" class="btn">刷新</button>
+      <a class="btn secondary" href="/">返回目录</a>
+    </div>
+  </section>
+
+  <section class="card">
+    <h2>当日涨幅领先</h2>
+    <table id="tbl">
+      <thead><tr><th>代码</th><th>现价</th><th>涨跌幅%</th></tr></thead>
+      <tbody></tbody>
+    </table>
+  </section>
 </main>
+
 <script>
 function fmt(n){return Number(n||0).toFixed(2)}
+function setStatus(t){ const el=document.getElementById('status'); if(el) el.innerText='状态：'+t; }
+
 function render(d){
- document.getElementById('ts').innerText='更新时间：'+(d.updated_at||'--');
- const s=d.stats||{};
- document.getElementById('stats').innerHTML=`上涨 ${s.up||0} | 下跌 ${s.down||0} | 平盘 ${s.flat||0} | 总数 ${s.total||0} | 成交额 ${fmt(s.amount_total)} 亿`;
- const tb=document.querySelector('#tbl tbody'); tb.innerHTML='';
- (d.leaders||[]).forEach(x=>{const tr=document.createElement('tr'); tr.innerHTML=`<td>${x.code} ${x.name}</td><td>${fmt(x.price)}</td><td>${fmt(x.chg)}</td>`; tb.appendChild(tr)})
+  document.getElementById('ts').innerText='更新时间：'+(d.updated_at||'--');
+  const s=d.stats||{};
+  document.getElementById('stats').innerHTML=`上涨 ${s.up||0} | 下跌 ${s.down||0} | 平盘 ${s.flat||0} | 总数 ${s.total||0} | 成交额 ${fmt(s.amount_total)} 亿`;
+  const tb=document.querySelector('#tbl tbody');
+  tb.innerHTML='';
+  (d.leaders||[]).forEach(x=>{
+    const tr=document.createElement('tr');
+    tr.innerHTML=`<td>${x.code} ${x.name}</td><td>${fmt(x.price)}</td><td>${fmt(x.chg)}</td>`;
+    tb.appendChild(tr);
+  });
+  if(!(d.leaders||[]).length){
+    tb.innerHTML='<tr><td colspan="3" style="text-align:center">暂无数据</td></tr>';
+  }
 }
-async function refreshPulse(){const res=await fetch('/api/market-pulse');const j=await res.json(); if(!res.ok||!j.ok){alert(j.message||'失败');return;} render(j.data)}
-refreshPulse();
+
+async function refreshPulse(){
+  const btn=document.getElementById('btnRefresh');
+  const old=btn.innerText;
+  btn.disabled=true; btn.innerText='刷新中...';
+  setStatus('刷新中');
+  try{
+    const res=await fetch('/api/market-pulse');
+    const j=await res.json();
+    if(!res.ok || !j.ok){
+      setStatus('失败（'+(j.message||('HTTP '+res.status))+')');
+      return;
+    }
+    render(j.data);
+    setStatus('刷新成功');
+  }catch(e){
+    setStatus('失败（网络异常）');
+  }finally{
+    btn.disabled=false; btn.innerText=old;
+  }
+}
+
+window.addEventListener('DOMContentLoaded',()=>{
+  const btn=document.getElementById('btnRefresh');
+  btn.addEventListener('click', refreshPulse);
+  refreshPulse();
+});
 </script>
 </body></html>
