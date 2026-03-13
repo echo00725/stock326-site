@@ -89,32 +89,53 @@
 
 <script>
 let current='600519', sortBy='signal_score', step=0;
+const el = {
+  kw: document.getElementById('kw'),
+  favOnly: document.getElementById('favOnly'),
+  th: document.getElementById('th'),
+  minRatio: document.getElementById('minRatio'),
+  minNet: document.getElementById('minNet'),
+  replay: document.getElementById('replay'),
+  formula: document.getElementById('formula'),
+  clock: document.getElementById('clock'),
+  detailTitle: document.getElementById('detailTitle'),
+  metrics: document.getElementById('metrics')
+};
 function fmt(n){return Number(n||0).toLocaleString('zh-CN',{maximumFractionDigits:2})}
 
 async function loadCfg(){
-  const j=await (await fetch('/api/monitor/config')).json();
+  const res = await fetch('/api/monitor/config');
+  const j = await res.json();
   const c=j.data||{};
-  th.value=c.big_trade_threshold||300000; minRatio.value=c.min_buy_ratio||1.2; minNet.value=c.min_net_buy_10s||200000; formula.value=c.signal_formula||formula.value;
+  el.th.value=c.big_trade_threshold||300000;
+  el.minRatio.value=c.min_buy_ratio||1.2;
+  el.minNet.value=c.min_net_buy_10s||200000;
+  el.formula.value=c.signal_formula||el.formula.value;
 }
 async function saveCfg(){
   await fetch('/api/monitor/config',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({
-    big_trade_threshold:Number(th.value||300000),min_buy_ratio:Number(minRatio.value||1.2),min_net_buy_10s:Number(minNet.value||200000),signal_formula:formula.value
+    big_trade_threshold:Number(el.th.value||300000),
+    min_buy_ratio:Number(el.minRatio.value||1.2),
+    min_net_buy_10s:Number(el.minNet.value||200000),
+    signal_formula:el.formula.value
   })});
-  refreshAll();
+  await refreshAll();
 }
 
 function toggleSort(){ sortBy = sortBy==='signal_score' ? 'net_buy_10s' : 'signal_score'; refreshRank(); }
 
 async function refreshRank(){
-  if(replay.checked) step += 3;
-  const q=new URLSearchParams({keyword:kw.value||'',favorites_only:favOnly.checked?'1':'0',step:String(step)});
-  const j=await (await fetch('/api/monitor/signals?'+q)).json();
+  if(el.replay.checked) step += 3;
+  const q=new URLSearchParams({keyword:el.kw.value||'',favorites_only:el.favOnly.checked?'1':'0',step:String(step)});
+  const res = await fetch('/api/monitor/signals?'+q);
+  const j=await res.json();
   const arr=(j.data||[]).sort((a,b)=>Number(b[sortBy])-Number(a[sortBy]));
-  if(j.server_time){ document.getElementById('clock').textContent = `服务器时间 ${j.server_time}`; }
+  if(j.server_time){ el.clock.textContent = `服务器时间 ${j.server_time}`; }
   const tb=document.querySelector('#rankTbl tbody'); tb.innerHTML='';
+  if(arr.length===0){ tb.innerHTML = '<tr><td colspan="8" style="text-align:center;color:#8ea3d6">暂无数据（请检查筛选条件）</td></tr>'; return; }
   arr.forEach(x=>{
     const tr=document.createElement('tr');
-    tr.innerHTML=`<td>${x.symbol} ${x.name}</td><td>${x.price.toFixed(2)}</td><td>${x.big_buy_count_10s}</td><td>${fmt(x.net_buy_10s)}</td><td>${x.buy_ratio_10s}</td><td>${(x.price_change_10s*100).toFixed(2)}%</td><td>${x.signal_score}</td><td>${x.triggered?'<span class="tag buy">触发</span>':'<span class="tag sell">观察</span>'}</td>`;
+    tr.innerHTML=`<td>${x.symbol} ${x.name}</td><td>${Number(x.price||0).toFixed(2)}</td><td>${x.big_buy_count_10s}</td><td>${fmt(x.net_buy_10s)}</td><td>${x.buy_ratio_10s}</td><td>${(Number(x.price_change_10s||0)*100).toFixed(2)}%</td><td>${x.signal_score}</td><td>${x.triggered?'<span class="tag buy">触发</span>':'<span class="tag sell">观察</span>'}</td>`;
     tr.onclick=()=>{current=x.symbol; refreshDetail();};
     tb.appendChild(tr);
   });
@@ -135,11 +156,12 @@ function draw(series){
 }
 
 async function refreshDetail(){
-  const j=await (await fetch(`/api/monitor/detail?symbol=${current}&step=${step}`)).json();
+  const res = await fetch(`/api/monitor/detail?symbol=${current}&step=${step}`);
+  const j=await res.json();
   const d=j.data; if(!d) return;
-  detailTitle.textContent=`单股详情：${d.symbol}（现价 ${Number(d.live_price||0).toFixed(2)}）`;
+  el.detailTitle.textContent=`单股详情：${d.symbol}（现价 ${Number(d.live_price||0).toFixed(2)}）`;
   const m=d.metrics;
-  metrics.innerHTML=`5秒净买入: <b>${fmt(m.m5.net_buy)}</b> ｜10秒净买入: <b>${fmt(m.m10.net_buy)}</b> ｜30秒净买入: <b>${fmt(m.m30.net_buy)}</b> ｜10秒买入强度比: <b>${m.m10.buy_ratio}</b>`;
+  el.metrics.innerHTML=`5秒净买入: <b>${fmt(m.m5.net_buy)}</b> ｜10秒净买入: <b>${fmt(m.m10.net_buy)}</b> ｜30秒净买入: <b>${fmt(m.m30.net_buy)}</b> ｜10秒买入强度比: <b>${m.m10.buy_ratio}</b>`;
   draw(d.series_1m||[]);
   const tb=document.querySelector('#bigTbl tbody'); tb.innerHTML='';
   (d.big_trades||[]).forEach(x=>{
@@ -149,8 +171,11 @@ async function refreshDetail(){
   })
 }
 
-async function refreshAll(){await refreshRank(); await refreshDetail();}
+async function refreshAll(){
+  try { await refreshRank(); await refreshDetail(); }
+  catch(e){ console.error(e); el.clock.textContent = '数据刷新异常，自动重试中'; }
+}
 setInterval(refreshAll, 3000);
-loadCfg().then(refreshAll);
+loadCfg().then(refreshAll).catch((e)=>{ console.error(e); refreshAll(); });
 </script>
 </body></html>
