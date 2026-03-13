@@ -186,12 +186,9 @@ def _real_rankings() -> dict:
 
 
 def run_daily_job():
-    try:
-        out = _real_rankings()
-        if not out.get("picks"):
-            raise RuntimeError("empty")
-    except Exception:
-        out = fallback_rankings()
+    out = _real_rankings()
+    if not out.get("picks"):
+        raise RuntimeError("实时计算结果为空")
     save_json(DATA_FILE, out)
     return out
 
@@ -536,7 +533,15 @@ def _build_signal_row(symbol: str, name: str, step: int, replay_mode: bool = Fal
 
 @app.route("/")
 def index():
-    data = load_json(DATA_FILE, fallback_rankings())
+    data = load_json(
+        DATA_FILE,
+        {
+            "updated_at": "尚未生成",
+            "strategy": {"name": "A股全市场短线交易参考排名", "version": "real-only", "principle": "仅真实计算结果，不使用假数据", "risk_note": "仅供研究"},
+            "industry_flow": [],
+            "picks": [],
+        },
+    )
     return render_template("index.html", data=data)
 
 
@@ -558,7 +563,17 @@ def validation_page():
 
 @app.route("/api/recommendations")
 def api_recommendations():
-    return jsonify(load_json(DATA_FILE, fallback_rankings()))
+    return jsonify(
+        load_json(
+            DATA_FILE,
+            {
+                "updated_at": "尚未生成",
+                "strategy": {"name": "A股全市场短线交易参考排名", "version": "real-only", "principle": "仅真实计算结果，不使用假数据", "risk_note": "仅供研究"},
+                "industry_flow": [],
+                "picks": [],
+            },
+        )
+    )
 
 
 @app.route("/api/validation")
@@ -770,8 +785,11 @@ def api_monitor_detail():
 
 @app.route("/api/run-now")
 def api_run_now():
-    run_daily_job()
-    return jsonify({"ok": True, "message": "已刷新短线排名"})
+    try:
+        run_daily_job()
+        return jsonify({"ok": True, "message": "已刷新短线排名（真实计算）"})
+    except Exception as e:
+        return jsonify({"ok": False, "message": f"真实计算失败：{e}"}), 500
 
 
 @app.route("/api/run-validation")
@@ -790,8 +808,11 @@ def setup_scheduler():
 
 if __name__ == "__main__":
     setup_scheduler()
-    if not DATA_FILE.exists():
-        run_daily_job()
+    try:
+        if not DATA_FILE.exists():
+            run_daily_job()
+    except Exception:
+        pass
     if not VALIDATION_FILE.exists():
         run_validation_job()
     app.run(host="0.0.0.0", port=8080, debug=True)
