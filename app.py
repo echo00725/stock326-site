@@ -6,6 +6,7 @@ import json
 import math
 import os
 import random
+import time
 from pathlib import Path
 
 import pytz
@@ -37,16 +38,36 @@ def save_json(path: Path, data: dict):
         return
 
 
-def _rq_get(url: str, params: dict, timeout: int = 8):
-    # 尽量绕过宿主代理，降低 Eastmoney 连接被代理中断概率
+def _rq_get(url: str, params: dict, timeout: int = 8, tries: int = 4):
+    # 规避代理干扰 + 模拟常见浏览器请求头，降低上游风控直接断连概率
     os.environ.setdefault("NO_PROXY", "*")
     os.environ.setdefault("no_proxy", "*")
+    headers = {
+        "User-Agent": (
+            "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+            "AppleWebKit/537.36 (KHTML, like Gecko) "
+            "Chrome/123.0.0.0 Safari/537.36"
+        ),
+        "Accept": "application/json,text/plain,*/*",
+        "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8",
+        "Connection": "close",
+        "Referer": "https://quote.eastmoney.com/",
+    }
+
     last_err = None
-    for i in range(3):
+    for i in range(tries):
         try:
-            return requests.get(url, params=params, timeout=timeout, proxies={"http": None, "https": None})
+            return requests.get(
+                url,
+                params=params,
+                timeout=timeout,
+                headers=headers,
+                proxies={"http": None, "https": None},
+            )
         except Exception as e:
             last_err = e
+            # 指数退避，避免短时间高频触发风控
+            time.sleep(0.35 * (2 ** i) + random.random() * 0.15)
     raise last_err
 
 
@@ -74,9 +95,13 @@ def fallback_rankings() -> dict:
 
 
 # ====== 短线排名 ======
-def _fetch_universe_realtime(limit_pages: int = 30) -> list[dict]:
-    # 东财全市场快照：默认拉取全市场（30页 * 200 = 6000）
+def _fetch_universe_realtime(limit_pages: int = 12) -> list[dict]:
+    # 东财全市场快照：默认12页（12*200=2400）已足够用于市场脉搏与候选池
+    # 关键修复：单页失败不再让整接口500，采用“部分成功可返回”
     rows = []
+    ok_pages = 0
+    last_err = None
+
     for pn in range(1, limit_pages + 1):
         url = "https://push2.eastmoney.com/api/qt/clist/get"
         params = {
@@ -91,9 +116,15 @@ def _fetch_universe_realtime(limit_pages: int = 30) -> list[dict]:
             "fields": "f12,f14,f2,f3,f6,f8,f15,f16,f17,f18",
             "ut": "fa5fd1943c7b386f172d6893dbfba10b",
         }
-        r = _rq_get(url, params=params, timeout=8)
-        r.raise_for_status()
-        diff = ((r.json().get("data") or {}).get("diff")) or []
+        try:
+            r = _rq_get(url, params=params, timeout=8)
+            r.raise_for_status()
+            diff = ((r.json().get("data") or {}).get("diff")) or []
+            ok_pages += 1
+        except Exception as e:
+            last_err = e
+            continue
+
         for d in diff:
             code = str(d.get("f12") or "")
             name = str(d.get("f14") or "")
@@ -113,7 +144,11 @@ def _fetch_universe_realtime(limit_pages: int = 30) -> list[dict]:
                     "preclose": float(d.get("f18") or 0),
                 }
             )
-    return [x for x in rows if x["price"] > 0 and x["amount"] > 0]
+
+    out = [x for x in rows if x["price"] > 0 and x["amount"] > 0]
+    if not out:
+        raise RuntimeError(f"实时快照全失败：ok_pages={ok_pages}/{limit_pages}; last_err={last_err}")
+    return out
 
 
 def _fetch_daily_kline(code: str, lmt: int = 70) -> list[dict]:
@@ -173,7 +208,8 @@ def _fetch_industry_flow_top10() -> list[dict]:
 
 def _real_rankings() -> dict:
     now = _cn_now().strftime("%Y-%m-%d %H:%M:%S")
-    universe = _fetch_universe_realtime(limit_pages=30)  # 全市场
+    # 取更稳的分片数，降低被上游风控断连概率
+    universe = _fetch_universe_realtime(limit_pages=12)
     scored = []
     for u in universe[:30]:
         code = u["code"]
@@ -368,7 +404,7 @@ def _oversold_rebound_scan() -> dict:
 
 def _market_pulse() -> dict:
     now = _cn_now().strftime("%Y-%m-%d %H:%M:%S")
-    uni = _fetch_universe_realtime(limit_pages=30)
+    uni = _fetch_universe_realtime(limit_pages=12)
     up = sum(1 for x in uni if x["chg"] > 0)
     down = sum(1 for x in uni if x["chg"] < 0)
     flat = len(uni) - up - down
@@ -810,7 +846,23 @@ def api_market_pulse():
     try:
         return jsonify({"ok": True, "data": _market_pulse()})
     except Exception as e:
-        return jsonify({"ok": False, "message": f"市场脉搏计算失败：{e}"}), 500
+        # 不中断前端：回退到最近短线结果中的时间戳与空统计
+        cached = load_json(DATA_FILE, {})
+        degraded = {
+            "updated_at": cached.get("updated_at", _cn_now().strftime("%Y-%m-%d %H:%M:%S")),
+            "scope": {
+                "name": "当前统计口径",
+                "fs": "m:0 t:6,m:0 t:80,m:1 t:2,m:1 t:23",
+                "desc": "实时源异常，返回降级空结果",
+                "limit_pages": 12,
+                "page_size": 200,
+            },
+            "stats": {"up": 0, "down": 0, "flat": 0, "total": 0, "amount_total": 0},
+            "leaders": [],
+            "degraded": True,
+            "error": str(e),
+        }
+        return jsonify({"ok": True, "degraded": True, "message": f"市场脉搏实时源异常，已降级：{e}", "data": degraded})
 
 
 @app.route("/api/validation")
@@ -1028,7 +1080,15 @@ def api_run_now():
         LAST_RECOMMENDATIONS = out
         return jsonify({"ok": True, "message": "已刷新短线排名（真实计算）", "data": out})
     except Exception as e:
-        return jsonify({"ok": False, "message": f"真实计算失败：{e}"}), 500
+        # 关键修复：真实源失败时回退缓存，不返回500
+        cached = LAST_RECOMMENDATIONS or load_json(DATA_FILE, fallback_rankings())
+        return jsonify({
+            "ok": True,
+            "degraded": True,
+            "message": f"实时源异常，已回退最近结果：{e}",
+            "data": cached,
+            "error": str(e),
+        })
 
 
 @app.route("/api/run-validation")
