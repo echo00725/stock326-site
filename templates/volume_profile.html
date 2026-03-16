@@ -45,12 +45,58 @@
       </div>
       <p id="meta" class="muted"></p>
       <p id="err" style="color:#b91c1c"></p>
+
+      <div class="row" style="margin-top:8px;">
+        <input id="priceFrom" class="input" style="min-width:140px" placeholder="起始价格，如 18.50" />
+        <input id="priceTo" class="input" style="min-width:140px" placeholder="结束价格，如 22.00" />
+        <button class="btn secondary" onclick="calcRangePct()">计算区间占比</button>
+      </div>
+      <p id="rangeResult" class="muted"></p>
+
       <div id="chart" class="chart-wrap"></div>
     </section>
   </main>
 
   <script>
+    let latestData = null;
+
     function fmtNum(n){ return Number(n||0).toLocaleString('zh-CN'); }
+
+    function calcRangePct(){
+      const result = document.getElementById('rangeResult');
+      const metric = document.getElementById('metric').value;
+      const fromVal = Number(document.getElementById('priceFrom').value);
+      const toVal = Number(document.getElementById('priceTo').value);
+
+      if(!latestData || !Array.isArray(latestData.profile) || latestData.profile.length===0){
+        result.textContent = '请先查询数据后再计算区间占比。';
+        return;
+      }
+      if(!Number.isFinite(fromVal) || !Number.isFinite(toVal)){
+        result.textContent = '请输入有效的起止价格。';
+        return;
+      }
+
+      const lo = Math.min(fromVal, toVal);
+      const hi = Math.max(fromVal, toVal);
+      const key = metric === 'amount' ? 'amount' : 'volume';
+      const total = metric === 'amount' ? Number(latestData.total_amount||0) : Number(latestData.total_volume||0);
+
+      if(total <= 0){
+        result.textContent = '总量为0，无法计算占比。';
+        return;
+      }
+
+      let part = 0;
+      for(const r of latestData.profile){
+        const p = Number(r.price||0);
+        if(p >= lo && p <= hi){
+          part += Number(r[key]||0);
+        }
+      }
+      const pct = part / total * 100;
+      result.textContent = `区间 ${lo.toFixed(2)} ~ ${hi.toFixed(2)} 在最近 ${latestData.range_days} 日内的${metric==='amount'?'成交额':'成交量'}占比：${pct.toFixed(2)}%（区间值 ${fmtNum(part)} / 总值 ${fmtNum(total)}）`;
+    }
 
     function renderChart(profile, metric){
       const box = document.getElementById('chart');
@@ -82,7 +128,9 @@
       const err = document.getElementById('err');
       const meta = document.getElementById('meta');
       const chart = document.getElementById('chart');
+      const rangeResult = document.getElementById('rangeResult');
       err.textContent = '';
+      rangeResult.textContent = '';
       meta.textContent = '加载中...';
       chart.innerHTML = '';
       if(!/^\d{6}$/.test(symbol)){
@@ -97,16 +145,27 @@
           throw new Error(json.error || '获取失败');
         }
         const d = json.data;
+        latestData = d;
         const pocText = metric === 'amount'
           ? (d.poc_by_amount?.toFixed(2) ?? '-')
           : (d.poc_by_volume?.toFixed(2) ?? '-');
         meta.textContent = `代码: ${d.symbol} | 区间: ${d.start_date} ~ ${d.end_date} (${d.range_days}日) | 总成交量: ${fmtNum(d.total_volume)} 股 | 总成交额: ${fmtNum(d.total_amount)} | POC(${metric==='amount'?'额':'量'}): ${pocText} | 数据源: ${d.source} | 可用分钟天数: ${d.minute_days_available ?? '-'} | ${d.note || ''}`;
         renderChart(d.profile, metric);
       }catch(e){
+        latestData = null;
         meta.textContent = '';
         err.textContent = e.message || '获取失败';
       }
     }
+
+    document.getElementById('metric').addEventListener('change', ()=>{
+      if(latestData){
+        renderChart(latestData.profile, document.getElementById('metric').value);
+        const fromInput = document.getElementById('priceFrom').value;
+        const toInput = document.getElementById('priceTo').value;
+        if(fromInput && toInput) calcRangePct();
+      }
+    });
 
     loadData();
   </script>
