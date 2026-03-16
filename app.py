@@ -206,6 +206,57 @@ def _fetch_industry_flow_top10() -> list[dict]:
     return out
 
 
+def _fetch_realtime_main_flow(code: str) -> dict | None:
+    secid = _secid(code)
+    # 分钟级主力净流入（盘中实时）
+    url = "https://push2.eastmoney.com/api/qt/stock/fflow/kline/get"
+    params = {
+        "lmt": 1,
+        "klt": 1,
+        "secid": secid,
+        "fields1": "f1,f2,f3,f7",
+        "fields2": "f51,f52,f53,f54,f55,f56,f57,f58,f59,f60,f61,f62,f63",
+        "ut": "b2884a393a59ad64002292a3e90d46a5",
+    }
+    r = _rq_get(url, params=params, timeout=8)
+    r.raise_for_status()
+    d = (r.json().get("data") or {})
+    kl = d.get("klines") or []
+    if not kl:
+        return None
+    p = str(kl[-1]).split(",")
+    if len(p) < 2:
+        return None
+
+    # 实时价格与涨跌幅
+    snap = _rq_get(
+        "https://push2.eastmoney.com/api/qt/stock/get",
+        params={
+            "secid": secid,
+            "fields": "f43,f170,f57,f58",
+            "ut": "fa5fd1943c7b386f172d6893dbfba10b",
+        },
+        timeout=6,
+    )
+    snap.raise_for_status()
+    sd = snap.json().get("data") or {}
+
+    ts = p[0]  # YYYY-MM-DD HH:MM
+    dt_date = ts.split(" ")[0]
+    net = float(p[1] or 0)
+    close = float(sd.get("f43") or 0) / 100
+    daily_ret = float(sd.get("f170") or 0) / 100
+    return {
+        "date": dt_date,
+        "ts": ts,
+        "main_net_inflow": round(net, 2),
+        "main_net_inflow_yi": round(net / 1e8, 4),
+        "close": round(close, 3),
+        "daily_return_pct": round(daily_ret, 3),
+        "is_realtime": True,
+    }
+
+
 def _fetch_main_net_inflow_30d(code: str, days: int = 30) -> dict:
     url = "https://push2his.eastmoney.com/api/qt/stock/fflow/daykline/get"
     params = {
@@ -235,8 +286,21 @@ def _fetch_main_net_inflow_30d(code: str, days: int = 30) -> dict:
                 "main_net_inflow_yi": round(net / 1e8, 4),
                 "close": round(close, 3),
                 "daily_return_pct": round(daily_ret, 3),
+                "is_realtime": False,
             }
         )
+
+    # 盘中优先用分钟级资金流实时覆盖当天数据
+    try:
+        rt = _fetch_realtime_main_flow(code)
+        if rt:
+            if rows and rows[-1].get("date") == rt["date"]:
+                rows[-1] = rt
+            else:
+                rows.append(rt)
+    except Exception:
+        pass
+
     rows = rows[-max(1, min(days, 120)) :]
     return {
         "code": code,

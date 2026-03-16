@@ -45,6 +45,7 @@
         <a class="btn secondary" href="/">返回首页</a>
       </div>
       <p id="meta" class="muted"></p>
+      <p id="rt" class="muted"></p>
       <p id="err" style="color:#b91c1c"></p>
 
       <div class="chart-card">
@@ -160,8 +161,10 @@
       const days = document.getElementById('days').value;
       const meta = document.getElementById('meta');
       const err = document.getElementById('err');
+      const rt = document.getElementById('rt');
       const tbody = document.getElementById('tbody');
       err.textContent = '';
+      rt.textContent = '';
       meta.textContent = '加载中...';
       tbody.innerHTML = '';
 
@@ -179,17 +182,23 @@
         }
 
         const d = json.data;
-        meta.textContent = `代码: ${d.code} ${d.name || ''} | 天数: ${d.days} | 区间合计净流入: ${fmtNum(d.summary.sum_yi)} 亿元`;
-
         const rowsAsc = (d.rows || []).slice();
+        const last = rowsAsc.length ? rowsAsc[rowsAsc.length - 1] : null;
+        const rtTag = last && last.is_realtime ? ` | 实时刷新: ${last.ts || last.date}` : ' | 当前为日线收盘数据';
+        meta.textContent = `代码: ${d.code} ${d.name || ''} | 天数: ${d.days} | 区间合计净流入: ${fmtNum(d.summary.sum_yi)} 亿元${rtTag}`;
+        if(last && last.is_realtime){
+          rt.textContent = '已接入盘中分钟级主力净流入，页面每20秒自动刷新。';
+        }
+
         drawChart(rowsAsc);
 
         rowsAsc.slice().reverse().forEach(r => {
           const tr = document.createElement('tr');
           const clsFlow = Number(r.main_net_inflow) >= 0 ? 'up' : 'down';
           const clsRet = Number(r.daily_return_pct) >= 0 ? 'up' : 'down';
+          const dateText = r.is_realtime ? `${r.date}（实时）` : r.date;
           tr.innerHTML = `
-            <td>${r.date}</td>
+            <td>${dateText}</td>
             <td class="${clsFlow}">${fmtNum(r.main_net_inflow_yi)}</td>
             <td class="${clsFlow}">${fmtNum(r.main_net_inflow)}</td>
             <td>${fmtNum(r.close)}</td>
@@ -205,6 +214,7 @@
     }
 
     loadData();
+    setInterval(loadData, 20000);
   </script>
 </body>
 </html>
