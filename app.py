@@ -1022,10 +1022,11 @@ def api_volume_profile():
 
     symbol = (request.args.get("symbol") or "").strip()
     days = (request.args.get("days") or "1").strip()
+    interval = (request.args.get("interval") or "1m").strip()
     if not symbol:
         return jsonify({"ok": False, "error": "缺少 symbol 参数"}), 400
     try:
-        data = get_volume_profile(symbol, days=int(days))
+        data = get_volume_profile(symbol, days=int(days), interval=interval)
         return jsonify({"ok": True, "data": data})
     except Exception as e:
         return jsonify({"ok": False, "error": str(e)}), 500

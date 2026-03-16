@@ -36,6 +36,10 @@
           <option value="60">最近60个交易日</option>
           <option value="90">最近90个交易日</option>
         </select>
+        <select id="interval" class="input" style="min-width:220px">
+          <option value="5m">免费长周期（5分钟，建议60~120天）</option>
+          <option value="1m">实时精细（1分钟，历史通常较短）</option>
+        </select>
         <select id="metric" class="input" style="min-width:120px">
           <option value="volume">横轴: 成交量</option>
           <option value="amount">横轴: 成交额</option>
@@ -44,6 +48,7 @@
         <a class="btn secondary" href="/">返回首页</a>
       </div>
       <p id="meta" class="muted"></p>
+      <p id="modeDiff" class="muted"></p>
       <p id="err" style="color:#b91c1c"></p>
 
       <div class="row" style="margin-top:8px;">
@@ -124,13 +129,16 @@
     async function loadData(){
       const symbol = document.getElementById('symbol').value.trim();
       const days = document.getElementById('days').value;
+      const interval = document.getElementById('interval').value;
       const metric = document.getElementById('metric').value;
       const err = document.getElementById('err');
       const meta = document.getElementById('meta');
+      const modeDiff = document.getElementById('modeDiff');
       const chart = document.getElementById('chart');
       const rangeResult = document.getElementById('rangeResult');
       err.textContent = '';
       rangeResult.textContent = '';
+      modeDiff.textContent = '';
       meta.textContent = '加载中...';
       chart.innerHTML = '';
       if(!/^\d{6}$/.test(symbol)){
@@ -139,7 +147,7 @@
         return;
       }
       try{
-        const res = await fetch(`/api/volume-profile?symbol=${symbol}&days=${days}`);
+        const res = await fetch(`/api/volume-profile?symbol=${symbol}&days=${days}&interval=${interval}`);
         const json = await res.json();
         if(!res.ok || !json.ok){
           throw new Error(json.error || '获取失败');
@@ -150,6 +158,7 @@
           ? (d.poc_by_amount?.toFixed(2) ?? '-')
           : (d.poc_by_volume?.toFixed(2) ?? '-');
         meta.textContent = `代码: ${d.symbol} | 区间: ${d.start_date} ~ ${d.end_date} (${d.range_days}日) | 总成交量: ${fmtNum(d.total_volume)} 股 | 总成交额: ${fmtNum(d.total_amount)} | POC(${metric==='amount'?'额':'量'}): ${pocText} | 数据源: ${d.source} | 可用分钟天数: ${d.minute_days_available ?? '-'} | ${d.note || ''}`;
+        modeDiff.textContent = '模式区别：5分钟=免费长周期（一般可到60~120天）；1分钟=更精细但历史通常较短，可能回退到日线。';
         renderChart(d.profile, metric);
       }catch(e){
         latestData = null;

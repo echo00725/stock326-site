@@ -141,7 +141,7 @@ def _fetch_eastmoney_trends(code: str) -> pd.DataFrame:
     return _parse_rows(klines)
 
 
-def _fetch_daily_kline(code: str, days: int = 120) -> pd.DataFrame:
+def _fetch_em_kline(code: str, klt: int, lmt: int = 20000) -> pd.DataFrame:
     s = _session()
     url = "https://push2his.eastmoney.com/api/qt/stock/kline/get"
     params = {
@@ -149,64 +149,83 @@ def _fetch_daily_kline(code: str, days: int = 120) -> pd.DataFrame:
         "ut": "fa5fd1943c7b386f172d6893dbfba10b",
         "fields1": "f1,f2,f3,f4,f5,f6",
         "fields2": "f51,f52,f53,f54,f55,f56,f57,f58,f59,f60,f61",
-        "klt": 101,  # 日线
+        "klt": klt,
         "fqt": 1,
-        "lmt": max(1, min(days, 240)),
+        "lmt": max(1, min(lmt, 50000)),
         "end": "20500000",
     }
-    r = s.get(url, params=params, timeout=15)
+    r = s.get(url, params=params, timeout=20)
     r.raise_for_status()
     kl = ((r.json().get("data") or {}).get("klines")) or []
 
     rows = []
     for line in kl:
         p = str(line).split(",")
-        if len(p) < 6:
+        if len(p) < 7:
             continue
-        # 日线近似：按收盘价聚合整日成交量/额（用于补足长周期）
-        rows.append({"time": p[0], "price": p[2], "volume": p[5], "amount": p[6] if len(p) > 6 else 0})
+        rows.append({"time": p[0], "price": p[2], "volume": p[5], "amount": p[6]})
     return pd.DataFrame(rows)
 
 
-def get_volume_profile(symbol: str, days: int = 1) -> dict:
+def _fetch_daily_kline(code: str, days: int = 120) -> pd.DataFrame:
+    return _fetch_em_kline(code, klt=101, lmt=max(days, 240))
+
+
+def get_volume_profile(symbol: str, days: int = 1, interval: str = "1m") -> dict:
     code = _norm_symbol(symbol)
     days = max(1, min(int(days), 120))
+    interval = (interval or "1m").strip().lower()
 
-    df_1m = _fetch_eastmoney_trends(code)
-    minute_dates = []
-    use_dates = []
-
-    if not df_1m.empty:
-        df_1m["date"] = df_1m["time"].astype(str).str[:10]
-        minute_dates = sorted(df_1m["date"].dropna().unique())
-
-    # 如果分钟数据不足（常见仅5天），自动回退到日线，支持到60/120天
-    if len(minute_dates) >= days:
-        use_dates = minute_dates[-days:]
-        dfx = df_1m[df_1m["date"].isin(use_dates)].copy()
-        source = "eastmoney_1m"
-        note = "分钟级聚合，按最近N个交易日统计"
+    minute_days = 0
+    if interval == "5m":
+        # 免费长周期优先：东财5分钟K线，通常可覆盖60~120天
+        df = _fetch_em_kline(code, klt=5, lmt=40000)
+        if df.empty:
+            raise RuntimeError("未获取到5分钟K线数据")
+        df["date"] = df["time"].astype(str).str[:10]
+        dates = sorted(df["date"].dropna().unique())
+        use_dates = dates[-days:]
+        dfx = df[df["date"].isin(use_dates)].copy()
+        source = "eastmoney_5m"
+        note = "免费长周期模式：5分钟K线聚合（通常可到60~120天）"
+        minute_days = len(dates)
     else:
-        df_day = _fetch_daily_kline(code, days=max(days, 120))
-        if df_day.empty:
-            raise RuntimeError("未获取到可用行情数据")
-        df_day["date"] = df_day["time"].astype(str).str[:10]
-        day_dates = sorted(df_day["date"].dropna().unique())
-        use_dates = day_dates[-days:]
-        dfx = df_day[df_day["date"].isin(use_dates)].copy()
-        source = "eastmoney_1d_fallback"
-        note = "分钟数据不足，已切换为日线近似分布（按日收盘价聚合成交量/额）"
+        # 实时优先：东财1分钟（常见近5天）
+        df_1m = _fetch_eastmoney_trends(code)
+        if not df_1m.empty:
+            df_1m["date"] = df_1m["time"].astype(str).str[:10]
+            minute_dates = sorted(df_1m["date"].dropna().unique())
+        else:
+            minute_dates = []
+
+        if len(minute_dates) >= days:
+            use_dates = minute_dates[-days:]
+            dfx = df_1m[df_1m["date"].isin(use_dates)].copy()
+            source = "eastmoney_1m"
+            note = "实时优先模式：1分钟聚合（精细，但历史通常较短）"
+        else:
+            df_day = _fetch_daily_kline(code, days=max(days, 120))
+            if df_day.empty:
+                raise RuntimeError("未获取到可用行情数据")
+            df_day["date"] = df_day["time"].astype(str).str[:10]
+            day_dates = sorted(df_day["date"].dropna().unique())
+            use_dates = day_dates[-days:]
+            dfx = df_day[df_day["date"].isin(use_dates)].copy()
+            source = "eastmoney_1d_fallback"
+            note = "1分钟数据不足，已回退到日线近似分布"
+        minute_days = len(minute_dates)
 
     out = _build_profile(dfx, "price", "volume", "amount")
     out.update(
         {
             "symbol": code,
             "source": source,
+            "interval": interval,
             "range_days": len(use_dates),
             "start_date": use_dates[0],
             "end_date": use_dates[-1],
             "note": note,
-            "minute_days_available": len(minute_dates),
+            "minute_days_available": minute_days,
             "updated_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
         }
     )
