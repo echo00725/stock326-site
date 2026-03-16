@@ -206,6 +206,51 @@ def _fetch_industry_flow_top10() -> list[dict]:
     return out
 
 
+def _fetch_main_net_inflow_30d(code: str, days: int = 30) -> dict:
+    url = "https://push2his.eastmoney.com/api/qt/stock/fflow/daykline/get"
+    params = {
+        "lmt": max(1, min(days, 120)),
+        "klt": 101,
+        "secid": _secid(code),
+        "fields1": "f1,f2,f3,f7",
+        "fields2": "f51,f52,f53,f54,f55,f56,f57,f58,f59,f60,f61,f62,f63",
+        "ut": "b2884a393a59ad64002292a3e90d46a5",
+    }
+    r = _rq_get(url, params=params, timeout=8)
+    r.raise_for_status()
+    data = (r.json().get("data") or {})
+    klines = data.get("klines") or []
+    rows = []
+    for s in klines:
+        p = str(s).split(",")
+        if len(p) < 2:
+            continue
+        net = float(p[1] or 0)  # 主力净流入(元)
+        close = float(p[11]) if len(p) > 11 and p[11] else 0.0
+        daily_ret = float(p[12]) if len(p) > 12 and p[12] else 0.0
+        rows.append(
+            {
+                "date": p[0],
+                "main_net_inflow": round(net, 2),
+                "main_net_inflow_yi": round(net / 1e8, 4),
+                "close": round(close, 3),
+                "daily_return_pct": round(daily_ret, 3),
+            }
+        )
+    rows = rows[-max(1, min(days, 120)) :]
+    return {
+        "code": code,
+        "name": str(data.get("name") or ""),
+        "market": data.get("market"),
+        "days": len(rows),
+        "rows": rows,
+        "summary": {
+            "sum": round(sum(x["main_net_inflow"] for x in rows), 2),
+            "sum_yi": round(sum(x["main_net_inflow"] for x in rows) / 1e8, 4),
+        },
+    }
+
+
 def _real_rankings() -> dict:
     now = _cn_now().strftime("%Y-%m-%d %H:%M:%S")
     # 取更稳的分片数，降低被上游风控断连概率
@@ -887,6 +932,24 @@ def api_news():
 @app.route("/volume-profile")
 def volume_profile_page():
     return render_template("volume_profile.html")
+
+
+@app.route("/main-net-inflow")
+def main_net_inflow_page():
+    return render_template("main_net_inflow.html")
+
+
+@app.route("/api/main-net-inflow")
+def api_main_net_inflow():
+    code = (request.args.get("code") or "").strip()
+    days = int((request.args.get("days") or "30").strip() or 30)
+    if not code or not code.isdigit() or len(code) != 6:
+        return jsonify({"ok": False, "error": "请输入6位A股代码"}), 400
+    try:
+        data = _fetch_main_net_inflow_30d(code=code, days=days)
+        return jsonify({"ok": True, "data": data})
+    except Exception as e:
+        return jsonify({"ok": False, "error": f"获取主力净流入失败：{e}"}), 500
 
 
 @app.route("/api/volume-profile")

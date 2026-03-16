@@ -1,0 +1,210 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>30天主力净流入</title>
+  <link rel="stylesheet" href="/static/style.css" />
+  <link rel="stylesheet" href="/static/dark.css" />
+  <style>
+    .row { display:flex; gap:8px; align-items:center; flex-wrap:wrap; }
+    .input { padding:8px 10px; border:1px solid #d1d5db; border-radius:8px; min-width:220px; }
+    .muted { color:#6b7280; font-size:14px; }
+    table { width:100%; border-collapse:collapse; margin-top:10px; }
+    th, td { border-bottom:1px solid #e5e7eb; padding:8px; text-align:right; font-variant-numeric: tabular-nums; }
+    th:first-child, td:first-child { text-align:left; }
+    .up { color:#16a34a; }
+    .down { color:#dc2626; }
+    .chart-card { margin-top:12px; border:1px solid #e5e7eb; border-radius:10px; padding:10px; }
+    .legend { display:flex; gap:14px; align-items:center; font-size:13px; color:#4b5563; margin:6px 0 8px; }
+    .dot { width:10px; height:10px; display:inline-block; border-radius:999px; margin-right:6px; }
+    .dot-blue { background:#2563eb; }
+    .dot-orange { background:#f97316; }
+    svg { width:100%; height:280px; background:linear-gradient(180deg,#fafafa,#fff); border-radius:8px; }
+    .axis-label { font-size:12px; fill:#6b7280; }
+    .grid { stroke:#e5e7eb; stroke-width:1; }
+    .line-blue { stroke:#2563eb; stroke-width:2.5; fill:none; }
+    .line-orange { stroke:#f97316; stroke-width:2.5; fill:none; }
+  </style>
+</head>
+<body>
+  <main class="container">
+    <h1>💰 30天主力净流入</h1>
+    <p class="sub">输入股票代码，查看最近N个交易日主力净流入趋势，并对比每日收益率</p>
+
+    <section class="card">
+      <div class="row">
+        <input id="code" class="input" placeholder="输入6位代码，如 600519" value="600519" />
+        <select id="days" class="input" style="min-width:120px">
+          <option value="30">最近30天</option>
+          <option value="20">最近20天</option>
+          <option value="10">最近10天</option>
+          <option value="60">最近60天</option>
+        </select>
+        <button class="btn" onclick="loadData()">查询</button>
+        <a class="btn secondary" href="/">返回首页</a>
+      </div>
+      <p id="meta" class="muted"></p>
+      <p id="err" style="color:#b91c1c"></p>
+
+      <div class="chart-card">
+        <div class="legend">
+          <span><i class="dot dot-blue"></i>主力净流入（亿元，左轴）</span>
+          <span><i class="dot dot-orange"></i>每日收益率（%，右轴）</span>
+        </div>
+        <svg id="chart" viewBox="0 0 960 280" preserveAspectRatio="none"></svg>
+      </div>
+
+      <div style="overflow:auto">
+        <table>
+          <thead>
+            <tr>
+              <th>日期</th>
+              <th>主力净流入(亿元)</th>
+              <th>主力净流入(元)</th>
+              <th>收盘价</th>
+              <th>当日收益率(%)</th>
+            </tr>
+          </thead>
+          <tbody id="tbody"></tbody>
+        </table>
+      </div>
+    </section>
+  </main>
+
+  <script>
+    function fmtNum(n){ return Number(n||0).toLocaleString('zh-CN'); }
+
+    function toPath(points){
+      if(!points.length) return '';
+      return points.map((p,i)=>`${i===0?'M':'L'}${p[0].toFixed(2)},${p[1].toFixed(2)}`).join(' ');
+    }
+
+    function drawChart(rows){
+      const svg = document.getElementById('chart');
+      svg.innerHTML = '';
+      if(!rows || rows.length < 2){
+        svg.innerHTML = '<text x="20" y="40" class="axis-label">数据不足，无法绘制趋势图</text>';
+        return;
+      }
+
+      const W = 960, H = 280;
+      const m = {l:56, r:56, t:18, b:30};
+      const cw = W - m.l - m.r;
+      const ch = H - m.t - m.b;
+
+      const xStep = cw / Math.max(1, rows.length - 1);
+      const inflow = rows.map(r=>Number(r.main_net_inflow_yi || 0));
+      const ret = rows.map(r=>Number(r.daily_return_pct || 0));
+
+      let minL = Math.min(...inflow), maxL = Math.max(...inflow);
+      let minR = Math.min(...ret), maxR = Math.max(...ret);
+      if(minL === maxL){ minL -= 1; maxL += 1; }
+      if(minR === maxR){ minR -= 1; maxR += 1; }
+
+      const yL = v => m.t + (maxL - v) / (maxL - minL) * ch;
+      const yR = v => m.t + (maxR - v) / (maxR - minR) * ch;
+      const x = i => m.l + i * xStep;
+
+      for(let i=0;i<4;i++){
+        const gy = m.t + i * (ch/3);
+        const line = document.createElementNS('http://www.w3.org/2000/svg','line');
+        line.setAttribute('x1', m.l); line.setAttribute('x2', W-m.r);
+        line.setAttribute('y1', gy); line.setAttribute('y2', gy);
+        line.setAttribute('class','grid');
+        svg.appendChild(line);
+      }
+
+      const leftTop = document.createElementNS('http://www.w3.org/2000/svg','text');
+      leftTop.setAttribute('x', 6); leftTop.setAttribute('y', 18); leftTop.setAttribute('class','axis-label');
+      leftTop.textContent = `${maxL.toFixed(2)}亿`;
+      svg.appendChild(leftTop);
+      const leftBottom = document.createElementNS('http://www.w3.org/2000/svg','text');
+      leftBottom.setAttribute('x', 6); leftBottom.setAttribute('y', H-8); leftBottom.setAttribute('class','axis-label');
+      leftBottom.textContent = `${minL.toFixed(2)}亿`;
+      svg.appendChild(leftBottom);
+
+      const rightTop = document.createElementNS('http://www.w3.org/2000/svg','text');
+      rightTop.setAttribute('x', W-52); rightTop.setAttribute('y', 18); rightTop.setAttribute('class','axis-label');
+      rightTop.textContent = `${maxR.toFixed(2)}%`;
+      svg.appendChild(rightTop);
+      const rightBottom = document.createElementNS('http://www.w3.org/2000/svg','text');
+      rightBottom.setAttribute('x', W-52); rightBottom.setAttribute('y', H-8); rightBottom.setAttribute('class','axis-label');
+      rightBottom.textContent = `${minR.toFixed(2)}%`;
+      svg.appendChild(rightBottom);
+
+      const p1 = rows.map((r,i)=>[x(i), yL(Number(r.main_net_inflow_yi || 0))]);
+      const p2 = rows.map((r,i)=>[x(i), yR(Number(r.daily_return_pct || 0))]);
+
+      const path1 = document.createElementNS('http://www.w3.org/2000/svg','path');
+      path1.setAttribute('d', toPath(p1));
+      path1.setAttribute('class','line-blue');
+      svg.appendChild(path1);
+
+      const path2 = document.createElementNS('http://www.w3.org/2000/svg','path');
+      path2.setAttribute('d', toPath(p2));
+      path2.setAttribute('class','line-orange');
+      svg.appendChild(path2);
+
+      const tickIdx = [0, Math.floor((rows.length-1)/2), rows.length-1];
+      tickIdx.forEach(idx=>{
+        const tx = document.createElementNS('http://www.w3.org/2000/svg','text');
+        tx.setAttribute('x', x(idx)-24); tx.setAttribute('y', H-8); tx.setAttribute('class','axis-label');
+        tx.textContent = rows[idx].date.slice(5);
+        svg.appendChild(tx);
+      });
+    }
+
+    async function loadData(){
+      const code = document.getElementById('code').value.trim();
+      const days = document.getElementById('days').value;
+      const meta = document.getElementById('meta');
+      const err = document.getElementById('err');
+      const tbody = document.getElementById('tbody');
+      err.textContent = '';
+      meta.textContent = '加载中...';
+      tbody.innerHTML = '';
+
+      if(!/^\d{6}$/.test(code)){
+        err.textContent = '请输入6位A股代码';
+        meta.textContent = '';
+        return;
+      }
+
+      try{
+        const res = await fetch(`/api/main-net-inflow?code=${code}&days=${days}`);
+        const json = await res.json();
+        if(!res.ok || !json.ok){
+          throw new Error(json.error || '获取失败');
+        }
+
+        const d = json.data;
+        meta.textContent = `代码: ${d.code} ${d.name || ''} | 天数: ${d.days} | 区间合计净流入: ${fmtNum(d.summary.sum_yi)} 亿元`;
+
+        const rowsAsc = (d.rows || []).slice();
+        drawChart(rowsAsc);
+
+        rowsAsc.slice().reverse().forEach(r => {
+          const tr = document.createElement('tr');
+          const clsFlow = Number(r.main_net_inflow) >= 0 ? 'up' : 'down';
+          const clsRet = Number(r.daily_return_pct) >= 0 ? 'up' : 'down';
+          tr.innerHTML = `
+            <td>${r.date}</td>
+            <td class="${clsFlow}">${fmtNum(r.main_net_inflow_yi)}</td>
+            <td class="${clsFlow}">${fmtNum(r.main_net_inflow)}</td>
+            <td>${fmtNum(r.close)}</td>
+            <td class="${clsRet}">${fmtNum(r.daily_return_pct)}</td>
+          `;
+          tbody.appendChild(tr);
+        });
+      }catch(e){
+        meta.textContent = '';
+        err.textContent = e.message || '获取失败';
+        drawChart([]);
+      }
+    }
+
+    loadData();
+  </script>
+</body>
+</html>
