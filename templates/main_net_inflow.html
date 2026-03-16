@@ -41,7 +41,13 @@
           <option value="10">最近10天</option>
           <option value="60">最近60天</option>
         </select>
-        <button class="btn" onclick="loadData()">查询</button>
+        <button class="btn" onclick="manualRefresh()">查询/刷新</button>
+        <label class="muted" style="display:flex;align-items:center;gap:6px;margin-left:6px;">
+          <input type="radio" name="refreshMode" value="auto" checked onchange="applyRefreshMode()" /> 20秒自动刷新
+        </label>
+        <label class="muted" style="display:flex;align-items:center;gap:6px;">
+          <input type="radio" name="refreshMode" value="fixed" onchange="applyRefreshMode()" /> 固定在我刷新时刻
+        </label>
         <a class="btn secondary" href="/">返回首页</a>
       </div>
       <p id="meta" class="muted"></p>
@@ -74,7 +80,38 @@
   </main>
 
   <script>
+    let refreshTimer = null;
+    let fixedAt = '';
+
     function fmtNum(n){ return Number(n||0).toLocaleString('zh-CN'); }
+
+    function nowText(){
+      const d = new Date();
+      const p = n => String(n).padStart(2,'0');
+      return `${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}`;
+    }
+
+    function currentMode(){
+      const el = document.querySelector('input[name="refreshMode"]:checked');
+      return el ? el.value : 'auto';
+    }
+
+    function applyRefreshMode(){
+      const mode = currentMode();
+      if(refreshTimer){ clearInterval(refreshTimer); refreshTimer = null; }
+      if(mode === 'auto'){
+        fixedAt = '';
+        refreshTimer = setInterval(loadData, 20000);
+      }else{
+        fixedAt = nowText();
+      }
+      loadData();
+    }
+
+    function manualRefresh(){
+      if(currentMode() === 'fixed') fixedAt = nowText();
+      loadData();
+    }
 
     function toPath(points){
       if(!points.length) return '';
@@ -184,10 +221,14 @@
         const d = json.data;
         const rowsAsc = (d.rows || []).slice();
         const last = rowsAsc.length ? rowsAsc[rowsAsc.length - 1] : null;
-        const rtTag = last && last.is_realtime ? ` | 实时刷新: ${last.ts || last.date}` : ' | 当前为日线收盘数据';
+        const rtTag = last && last.is_realtime ? ` | 数据时间: ${last.ts || last.date}` : ' | 当前为日线收盘数据';
         meta.textContent = `代码: ${d.code} ${d.name || ''} | 天数: ${d.days} | 区间合计净流入: ${fmtNum(d.summary.sum_yi)} 亿元${rtTag}`;
         if(last && last.is_realtime){
-          rt.textContent = '已接入盘中分钟级主力净流入，页面每20秒自动刷新。';
+          if(currentMode() === 'auto'){
+            rt.textContent = '模式：20秒自动刷新（实时）。';
+          }else{
+            rt.textContent = `模式：固定快照（锁定在 ${fixedAt || nowText()}，仅点击“查询/刷新”才更新）。`;
+          }
         }
 
         drawChart(rowsAsc);
@@ -213,8 +254,7 @@
       }
     }
 
-    loadData();
-    setInterval(loadData, 20000);
+    applyRefreshMode();
   </script>
 </body>
 </html>
