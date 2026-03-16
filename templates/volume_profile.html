@@ -33,6 +33,8 @@
           <option value="10">最近10个交易日</option>
           <option value="20">最近20个交易日</option>
           <option value="30">最近30个交易日</option>
+          <option value="60">最近60个交易日</option>
+          <option value="90">最近90个交易日</option>
         </select>
         <select id="metric" class="input" style="min-width:120px">
           <option value="volume">横轴: 成交量</option>
@@ -98,7 +100,7 @@
         const pocText = metric === 'amount'
           ? (d.poc_by_amount?.toFixed(2) ?? '-')
           : (d.poc_by_volume?.toFixed(2) ?? '-');
-        meta.textContent = `代码: ${d.symbol} | 区间: ${d.start_date} ~ ${d.end_date} (${d.range_days}日) | 总成交量: ${fmtNum(d.total_volume)} 股 | 总成交额: ${fmtNum(d.total_amount)} | POC(${metric==='amount'?'额':'量'}): ${pocText} | 数据源: ${d.source}`;
+        meta.textContent = `代码: ${d.symbol} | 区间: ${d.start_date} ~ ${d.end_date} (${d.range_days}日) | 总成交量: ${fmtNum(d.total_volume)} 股 | 总成交额: ${fmtNum(d.total_amount)} | POC(${metric==='amount'?'额':'量'}): ${pocText} | 数据源: ${d.source} | 可用分钟天数: ${d.minute_days_available ?? '-'} | ${d.note || ''}`;
         renderChart(d.profile, metric);
       }catch(e){
         meta.textContent = '';
