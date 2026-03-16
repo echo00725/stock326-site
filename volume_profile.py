@@ -65,6 +65,34 @@ def _build_profile(df: pd.DataFrame, price_col: str, volume_col: str, amount_col
     }
 
 
+def _build_hourly_amount(df: pd.DataFrame) -> list[dict]:
+    if df.empty or "time" not in df.columns:
+        return []
+
+    tmp = df.copy()
+    ts = pd.to_datetime(tmp["time"], errors="coerce")
+    tmp = tmp[ts.notna()].copy()
+    if tmp.empty:
+        return []
+
+    tmp["hour"] = pd.to_datetime(tmp["time"], errors="coerce").dt.strftime("%H")
+    tmp["amount_num"] = pd.to_numeric(tmp.get("amount"), errors="coerce").fillna(0.0)
+    grp = tmp.groupby("hour", as_index=False)["amount_num"].sum().sort_values("hour")
+
+    total = float(grp["amount_num"].sum())
+    out = []
+    for _, r in grp.iterrows():
+        amt = float(r["amount_num"])
+        out.append(
+            {
+                "hour": str(r["hour"]),
+                "amount": round(amt, 2),
+                "pct": round((amt / total * 100.0), 2) if total > 0 else 0.0,
+            }
+        )
+    return out
+
+
 def _session() -> requests.Session:
     s = requests.Session()
     retry = Retry(
@@ -216,6 +244,11 @@ def get_volume_profile(symbol: str, days: int = 1, interval: str = "1m") -> dict
         minute_days = len(minute_dates)
 
     out = _build_profile(dfx, "price", "volume", "amount")
+
+    hourly_amount = []
+    if len(use_dates) == 1:
+        hourly_amount = _build_hourly_amount(dfx)
+
     out.update(
         {
             "symbol": code,
@@ -226,6 +259,7 @@ def get_volume_profile(symbol: str, days: int = 1, interval: str = "1m") -> dict
             "end_date": use_dates[-1],
             "note": note,
             "minute_days_available": minute_days,
+            "hourly_amount": hourly_amount,
             "updated_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
         }
     )

@@ -59,6 +59,23 @@
       <p id="rangeResult" class="muted"></p>
 
       <div id="chart" class="chart-wrap"></div>
+
+      <div id="hourlyBox" class="card" style="margin-top:12px; display:none;">
+        <h3 style="margin:0 0 8px 0;">当日分时成交额（按小时）</h3>
+        <p class="muted" id="hourlyMeta"></p>
+        <div style="overflow:auto;">
+          <table style="width:100%;border-collapse:collapse;">
+            <thead>
+              <tr>
+                <th style="text-align:left;padding:6px;border-bottom:1px solid #e5e7eb;">小时段</th>
+                <th style="text-align:right;padding:6px;border-bottom:1px solid #e5e7eb;">成交额</th>
+                <th style="text-align:right;padding:6px;border-bottom:1px solid #e5e7eb;">占当日比例</th>
+              </tr>
+            </thead>
+            <tbody id="hourlyTbody"></tbody>
+          </table>
+        </div>
+      </div>
     </section>
   </main>
 
@@ -126,6 +143,32 @@
       });
     }
 
+    function renderHourly(d){
+      const box = document.getElementById('hourlyBox');
+      const meta = document.getElementById('hourlyMeta');
+      const tbody = document.getElementById('hourlyTbody');
+      tbody.innerHTML = '';
+
+      const rows = (d && Array.isArray(d.hourly_amount)) ? d.hourly_amount : [];
+      if(!d || Number(d.range_days)!==1 || !rows.length){
+        box.style.display = 'none';
+        return;
+      }
+
+      rows.forEach(r=>{
+        const tr = document.createElement('tr');
+        tr.innerHTML = `
+          <td style="text-align:left;padding:6px;border-bottom:1px solid #f1f5f9;">${r.hour}:00-${r.hour}:59</td>
+          <td style="text-align:right;padding:6px;border-bottom:1px solid #f1f5f9;">${fmtNum(r.amount)}</td>
+          <td style="text-align:right;padding:6px;border-bottom:1px solid #f1f5f9;">${Number(r.pct||0).toFixed(2)}%</td>
+        `;
+        tbody.appendChild(tr);
+      });
+
+      meta.textContent = `按小时统计当日成交额，并计算占当日总成交额比例（代码：${d.symbol}）`;
+      box.style.display = 'block';
+    }
+
     async function loadData(){
       const symbol = document.getElementById('symbol').value.trim();
       const days = document.getElementById('days').value;
@@ -136,9 +179,11 @@
       const modeDiff = document.getElementById('modeDiff');
       const chart = document.getElementById('chart');
       const rangeResult = document.getElementById('rangeResult');
+      const hourlyBox = document.getElementById('hourlyBox');
       err.textContent = '';
       rangeResult.textContent = '';
       modeDiff.textContent = '';
+      hourlyBox.style.display = 'none';
       meta.textContent = '加载中...';
       chart.innerHTML = '';
       if(!/^\d{6}$/.test(symbol)){
@@ -160,6 +205,7 @@
         meta.textContent = `代码: ${d.symbol} | 区间: ${d.start_date} ~ ${d.end_date} (${d.range_days}日) | 总成交量: ${fmtNum(d.total_volume)} 股 | 总成交额: ${fmtNum(d.total_amount)} | POC(${metric==='amount'?'额':'量'}): ${pocText} | 数据源: ${d.source} | 可用分钟天数: ${d.minute_days_available ?? '-'} | ${d.note || ''}`;
         modeDiff.textContent = '模式区别：5分钟=免费长周期（一般可到60~120天）；1分钟=更精细但历史通常较短，可能回退到日线。';
         renderChart(d.profile, metric);
+        renderHourly(d);
       }catch(e){
         latestData = null;
         meta.textContent = '';
