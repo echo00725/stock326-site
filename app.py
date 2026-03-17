@@ -221,7 +221,7 @@ def _fetch_realtime_main_flow(code: str) -> dict | None:
         "fields2": "f51,f52,f53,f54,f55,f56,f57,f58,f59,f60,f61,f62,f63",
         "ut": "b2884a393a59ad64002292a3e90d46a5",
     }
-    r = _rq_get(url, params=params, timeout=8)
+    r = _rq_get(url, params=params, timeout=2, tries=1)
     r.raise_for_status()
     d = (r.json().get("data") or {})
     kl = d.get("klines") or []
@@ -239,7 +239,8 @@ def _fetch_realtime_main_flow(code: str) -> dict | None:
             "fields": "f43,f170,f57,f58",
             "ut": "fa5fd1943c7b386f172d6893dbfba10b",
         },
-        timeout=6,
+        timeout=2,
+        tries=1,
     )
     snap.raise_for_status()
     sd = snap.json().get("data") or {}
@@ -270,7 +271,7 @@ def _fetch_main_net_inflow_30d(code: str, days: int = 30) -> dict:
         "fields2": "f51,f52,f53,f54,f55,f56,f57,f58,f59,f60,f61,f62,f63",
         "ut": "b2884a393a59ad64002292a3e90d46a5",
     }
-    r = _rq_get(url, params=params, timeout=8)
+    r = _rq_get(url, params=params, timeout=2, tries=1)
     r.raise_for_status()
     data = (r.json().get("data") or {})
     klines = data.get("klines") or []
