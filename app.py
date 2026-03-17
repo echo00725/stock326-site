@@ -354,7 +354,7 @@ def _fetch_main_flow_days_brief(code: str, days: int = 3) -> list[dict]:
 def _flow_divergence_scan(days: int = 3, max_scan: int = 120) -> dict:
     start = time.time()
     days = 2 if days == 2 else 3
-    max_scan = max(40, min(300, max_scan))
+    max_scan = max(20, min(300, max_scan))
 
     # 1) 先用单次快照预筛（今日主力净流入>0 且 今日涨跌<0），显著降低后续逐股请求量
     universe = _fetch_universe_realtime(limit_pages=12)
@@ -1128,7 +1128,7 @@ def api_flow_divergence():
     force = (request.args.get("force") or "0") == "1"
 
     days = 2 if days == 2 else 3
-    max_scan = max(40, min(300, max_scan))
+    max_scan = max(20, min(300, max_scan))
     cache_key = f"{days}:{max_scan}"
 
     if not force and FLOW_DIVERGENCE_CACHE.get("key") == cache_key and time.time() - float(FLOW_DIVERGENCE_CACHE.get("ts") or 0) < 180:
