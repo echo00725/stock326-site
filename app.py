@@ -25,6 +25,7 @@ LAST_RECOMMENDATIONS = None
 FLOW_DIVERGENCE_CACHE = {"ts": 0.0, "key": "", "payload": None}
 FLOW_DIVERGENCE_JOBS = {}
 FLOW_DIVERGENCE_LOCK = threading.Lock()
+UNIVERSE_CACHE = {"ts": 0.0, "rows": []}
 MAIN_INFLOW_CACHE = {}
 
 
@@ -104,6 +105,7 @@ def fallback_rankings() -> dict:
 def _fetch_universe_realtime(limit_pages: int = 12) -> list[dict]:
     # 东财全市场快照：默认12页（12*200=2400）已足够用于市场脉搏与候选池
     # 关键修复：单页失败不再让整接口500，采用“部分成功可返回”
+    global UNIVERSE_CACHE
     rows = []
     ok_pages = 0
     last_err = None
@@ -152,9 +154,42 @@ def _fetch_universe_realtime(limit_pages: int = 12) -> list[dict]:
             )
 
     out = [x for x in rows if x["price"] > 0 and x["amount"] > 0]
-    if not out:
-        raise RuntimeError(f"实时快照全失败：ok_pages={ok_pages}/{limit_pages}; last_err={last_err}")
-    return out
+    if out:
+        UNIVERSE_CACHE = {"ts": time.time(), "rows": out}
+        return out
+
+    # 备用1：尝试快速全市场抓取口径（不同分页参数）
+    try:
+        fast_rows, fast_ok, fast_total = _fetch_universe_fast_full()
+        if fast_rows:
+            mapped = [
+                {
+                    "code": x.get("code", ""),
+                    "name": x.get("name", ""),
+                    "price": float(x.get("price") or 0),
+                    "chg": float(x.get("chg") or 0),
+                    "amount": float(x.get("amount") or 0),
+                    "turnover": float(x.get("turnover") or 0),
+                    "high": 0.0,
+                    "low": 0.0,
+                    "open": 0.0,
+                    "preclose": 0.0,
+                }
+                for x in fast_rows
+                if len(str(x.get("code") or "")) == 6
+            ]
+            if mapped:
+                UNIVERSE_CACHE = {"ts": time.time(), "rows": mapped}
+                return mapped
+    except Exception:
+        pass
+
+    # 备用2：回退最近缓存，保证服务不断
+    cached = UNIVERSE_CACHE.get("rows") or []
+    if cached:
+        return cached
+
+    raise RuntimeError(f"实时快照全失败：ok_pages={ok_pages}/{limit_pages}; last_err={last_err}")
 
 
 def _fetch_daily_kline(code: str, lmt: int = 70) -> list[dict]:
