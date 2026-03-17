@@ -7,7 +7,7 @@ import math
 import os
 import random
 import time
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from concurrent.futures import ThreadPoolExecutor, as_completed, TimeoutError
 from pathlib import Path
 
 import pytz
@@ -328,7 +328,7 @@ def _fetch_main_flow_days_brief(code: str, days: int = 3) -> list[dict]:
         "fields2": "f51,f52,f53,f54,f55,f56,f57,f58,f59,f60,f61,f62,f63",
         "ut": "b2884a393a59ad64002292a3e90d46a5",
     }
-    r = _rq_get(url, params=params, timeout=6, tries=2)
+    r = _rq_get(url, params=params, timeout=2, tries=1)
     r.raise_for_status()
     data = (r.json().get("data") or {})
     klines = data.get("klines") or []
@@ -388,22 +388,24 @@ def _flow_divergence_scan(days: int = 3, max_scan: int = 120) -> dict:
     checked = 0
     errs = 0
     # 并行请求+软超时，优先返回可用结果而不是挂死
-    deadline = start + (7.5 if os.getenv("VERCEL") else 14)
-    workers = 10 if os.getenv("VERCEL") else 16
+    soft_budget = 6.5 if os.getenv("VERCEL") else 12
+    workers = 16 if os.getenv("VERCEL") else 24
     ex = ThreadPoolExecutor(max_workers=workers)
     try:
         futs = [ex.submit(worker, u) for u in candidates]
-        for fut in as_completed(futs):
-            if time.time() > deadline:
-                break
-            checked += 1
-            try:
-                row = fut.result()
-                if row:
-                    items.append(row)
-            except Exception:
-                errs += 1
-                continue
+        try:
+            for fut in as_completed(futs, timeout=soft_budget):
+                checked += 1
+                try:
+                    row = fut.result()
+                    if row:
+                        items.append(row)
+                except Exception:
+                    errs += 1
+                    continue
+        except TimeoutError:
+            # 到达软超时：直接返回当前已完成的结果
+            pass
     finally:
         ex.shutdown(wait=False, cancel_futures=True)
 
