@@ -31,9 +31,9 @@
           <option value="3" selected>最近3天</option>
         </select>
         <select id="maxScan" class="input">
-          <option value="20" selected>扫描前20只（默认/最稳）</option>
-          <option value="80">扫描前80只（更快）</option>
-          <option value="120">扫描前120只（较慢）</option>
+          <option value="20">扫描前20只（最快）</option>
+          <option value="80">扫描前80只（较快）</option>
+          <option value="120" selected>扫描前120只（默认/更全）</option>
           <option value="200">扫描前200只（更全）</option>
           <option value="300">扫描前300只（最全/较慢）</option>
         </select>
@@ -72,13 +72,12 @@
       const meta = document.getElementById('meta');
       const err = document.getElementById('err');
       const tbody = document.getElementById('tbody');
-      meta.textContent = '扫描中，请稍候...';
+      meta.textContent = '扫描中，请稍候（可能需要20~60秒）...';
       err.textContent = '';
-      tbody.innerHTML = '';
 
       try{
         const ctrl = new AbortController();
-        const timer = setTimeout(() => ctrl.abort(), 70000);
+        const timer = setTimeout(() => ctrl.abort(), 120000);
         const res = await fetch(`/api/flow-divergence?days=${days}&max_scan=${maxScan}&force=${force}`, { signal: ctrl.signal });
         clearTimeout(timer);
         const json = await res.json();
@@ -87,8 +86,10 @@
         const d = json.data || {};
         const s = d.scan_info || {};
         const cached = d.cached ? '（缓存）' : '';
-        meta.textContent = `更新时间: ${d.updated_at || '-'} ${cached} | 扫描: ${s.candidates || 0}/${s.universe_total || 0} | 命中: ${s.matched || 0} | 用时: ${s.elapsed_sec || 0}s`;
+        const msg = json.message ? ` | ${json.message}` : '';
+        meta.textContent = `更新时间: ${d.updated_at || '-'} ${cached} | 扫描: ${s.candidates || 0}/${s.universe_total || 0} | 命中: ${s.matched || 0} | 用时: ${s.elapsed_sec || 0}s${msg}`;
 
+        tbody.innerHTML = '';
         (d.items || []).forEach(x => {
           const tr = document.createElement('tr');
           const chgCls = Number(x.today_chg) >= 0 ? 'up' : 'down';

@@ -1164,6 +1164,8 @@ def _start_flow_divergence_job(cache_key: str, days: int, max_scan: int):
 
 @app.route("/api/flow-divergence")
 def api_flow_divergence():
+    """同步扫描接口：允许请求耗时更长，但优先返回真实结果（非空跑状态）。"""
+    global FLOW_DIVERGENCE_CACHE
     days = int((request.args.get("days") or "3").strip() or 3)
     max_scan = int((request.args.get("max_scan") or "120").strip() or 120)
     force = (request.args.get("force") or "0") == "1"
@@ -1172,35 +1174,40 @@ def api_flow_divergence():
     max_scan = max(20, min(300, max_scan))
     cache_key = f"{days}:{max_scan}"
 
-    # 首次访问或强制刷新：后台异步重算，不阻塞当前请求
-    if force or FLOW_DIVERGENCE_CACHE.get("key") != cache_key:
-        _start_flow_divergence_job(cache_key, days, max_scan)
-
-    with FLOW_DIVERGENCE_LOCK:
-        st = dict(FLOW_DIVERGENCE_JOBS.get(cache_key) or {"running": False, "last_error": None, "last_ok": None, "last_done_at": None})
-
-    cached = FLOW_DIVERGENCE_CACHE.get("payload") if FLOW_DIVERGENCE_CACHE.get("key") == cache_key else None
-    if cached:
-        payload = dict(cached)
+    # 非强刷优先返回最近缓存（3分钟），减少重复压测上游
+    if not force and FLOW_DIVERGENCE_CACHE.get("key") == cache_key and time.time() - float(FLOW_DIVERGENCE_CACHE.get("ts") or 0) < 180:
+        payload = dict(FLOW_DIVERGENCE_CACHE.get("payload") or {})
         payload["cached"] = True
-        return jsonify({"ok": True, "data": payload, "job": st})
+        return jsonify({"ok": True, "data": payload})
 
-    # 无缓存也保证秒回：返回结构化空数据 + 作业状态（running/failed）
-    empty = {
-        "updated_at": _cn_now().strftime("%Y-%m-%d %H:%M:%S"),
-        "params": {"days": days, "max_scan": max_scan},
-        "scan_info": {
-            "universe_total": 0,
-            "candidates": 0,
-            "checked": 0,
-            "errors": 0,
-            "matched": 0,
-            "elapsed_sec": 0,
-            "note": "后台正在计算完整结果，请稍后刷新。",
-        },
-        "items": [],
-    }
-    return jsonify({"ok": True, "data": empty, "job": st})
+    try:
+        data = _flow_divergence_scan(days=days, max_scan=max_scan)
+        FLOW_DIVERGENCE_CACHE = {"ts": time.time(), "key": cache_key, "payload": data}
+        return jsonify({"ok": True, "data": data})
+    except Exception as e:
+        # 出错时优先回退到最近缓存，保证可用性
+        cached = FLOW_DIVERGENCE_CACHE.get("payload") if FLOW_DIVERGENCE_CACHE.get("key") == cache_key else None
+        if cached:
+            payload = dict(cached)
+            payload["degraded"] = True
+            return jsonify({"ok": True, "degraded": True, "message": f"实时扫描失败，已回退缓存：{e}", "data": payload})
+
+        empty = {
+            "updated_at": _cn_now().strftime("%Y-%m-%d %H:%M:%S"),
+            "params": {"days": days, "max_scan": max_scan},
+            "scan_info": {
+                "universe_total": 0,
+                "candidates": 0,
+                "checked": 0,
+                "errors": 1,
+                "matched": 0,
+                "elapsed_sec": 0,
+                "note": "实时数据源异常。",
+            },
+            "items": [],
+            "degraded": True,
+        }
+        return jsonify({"ok": True, "degraded": True, "message": f"扫描失败：{e}", "data": empty})
 
 
 @app.route("/api/main-net-inflow")
