@@ -365,8 +365,9 @@ def _flow_divergence_scan(days: int = 3, max_scan: int = 120) -> dict:
     pre.sort(key=lambda x: x.get("amount", 0), reverse=True)
     pre = pre[:max_scan]
 
-    # 直接取高流动性的负收益样本进入逐日校验，避免串行快照请求导致超时
-    candidates = pre[: min(len(pre), 30 if os.getenv("VERCEL") else 45)]
+    # 直接取高流动性的负收益样本进入逐日校验
+    # 按用户要求：不再做固定候选上限截断，使用页面传入的 max_scan 全量候选
+    candidates = pre[:max_scan]
 
     def worker(u: dict):
         code = u["code"]
