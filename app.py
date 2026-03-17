@@ -1141,7 +1141,22 @@ def api_flow_divergence():
         FLOW_DIVERGENCE_CACHE = {"ts": time.time(), "key": cache_key, "payload": data}
         return jsonify({"ok": True, "data": data})
     except Exception as e:
-        return jsonify({"ok": False, "error": f"扫描失败：{e}"}), 500
+        fallback = {
+            "updated_at": _cn_now().strftime("%Y-%m-%d %H:%M:%S"),
+            "params": {"days": days, "max_scan": max_scan},
+            "scan_info": {
+                "universe_total": 0,
+                "candidates": 0,
+                "checked": 0,
+                "errors": 1,
+                "matched": 0,
+                "elapsed_sec": 0,
+                "note": "实时数据源异常，已降级为空结果，可稍后重试。",
+            },
+            "items": [],
+            "degraded": True,
+        }
+        return jsonify({"ok": True, "degraded": True, "message": f"数据源异常：{e}", "data": fallback})
 
 
 @app.route("/api/main-net-inflow")
