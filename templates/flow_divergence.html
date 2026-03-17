@@ -1,0 +1,112 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>资金流入为正但收益为负</title>
+  <link rel="stylesheet" href="/static/style.css" />
+  <link rel="stylesheet" href="/static/dark.css" />
+  <style>
+    .row { display:flex; gap:8px; align-items:center; flex-wrap:wrap; }
+    .input { padding:8px 10px; border:1px solid #d1d5db; border-radius:8px; min-width:140px; }
+    .muted { color:#6b7280; font-size:14px; }
+    table { width:100%; border-collapse:collapse; margin-top:10px; }
+    th, td { border-bottom:1px solid #e5e7eb; padding:8px; text-align:right; font-variant-numeric: tabular-nums; }
+    th:first-child, td:first-child, th:nth-child(2), td:nth-child(2) { text-align:left; }
+    .up { color:#16a34a; }
+    .down { color:#dc2626; }
+    .tag { display:inline-block; padding:2px 8px; border-radius:999px; background:#f3f4f6; font-size:12px; color:#374151; }
+    .subline { color:#6b7280; font-size:12px; }
+  </style>
+</head>
+<body>
+  <main class="container">
+    <h1>🧭 资金流入为正但收益为负（2~3日）</h1>
+    <p class="sub">筛选条件：最近2或3个交易日，主力净流入每天为正，同时每日收益率为负。</p>
+
+    <section class="card">
+      <div class="row">
+        <select id="days" class="input">
+          <option value="2">最近2天</option>
+          <option value="3" selected>最近3天</option>
+        </select>
+        <select id="maxScan" class="input">
+          <option value="80">扫描前80只（更快）</option>
+          <option value="120" selected>扫描前120只（默认）</option>
+          <option value="200">扫描前200只（更全）</option>
+          <option value="300">扫描前300只（最全/较慢）</option>
+        </select>
+        <button class="btn" onclick="loadData(1)">立即筛选</button>
+        <a class="btn secondary" href="/">返回首页</a>
+      </div>
+      <p id="meta" class="muted"></p>
+      <p id="err" style="color:#b91c1c"></p>
+
+      <div style="overflow:auto">
+        <table>
+          <thead>
+            <tr>
+              <th>代码</th>
+              <th>名称</th>
+              <th>现价</th>
+              <th>当日涨跌(%)</th>
+              <th>近N日净流入合计(亿元)</th>
+              <th>近N日平均收益(%)</th>
+              <th>最近N日明细</th>
+            </tr>
+          </thead>
+          <tbody id="tbody"></tbody>
+        </table>
+      </div>
+    </section>
+  </main>
+
+  <script>
+    function fmt(n, d=2){ return Number(n || 0).toFixed(d); }
+
+    async function loadData(force = 0){
+      const days = document.getElementById('days').value;
+      const maxScan = document.getElementById('maxScan').value;
+      const meta = document.getElementById('meta');
+      const err = document.getElementById('err');
+      const tbody = document.getElementById('tbody');
+      meta.textContent = '扫描中，请稍候...';
+      err.textContent = '';
+      tbody.innerHTML = '';
+
+      try{
+        const res = await fetch(`/api/flow-divergence?days=${days}&max_scan=${maxScan}&force=${force}`);
+        const json = await res.json();
+        if(!res.ok || !json.ok) throw new Error(json.error || '筛选失败');
+
+        const d = json.data || {};
+        const s = d.scan_info || {};
+        const cached = d.cached ? '（缓存）' : '';
+        meta.textContent = `更新时间: ${d.updated_at || '-'} ${cached} | 扫描: ${s.candidates || 0}/${s.universe_total || 0} | 命中: ${s.matched || 0} | 用时: ${s.elapsed_sec || 0}s`;
+
+        (d.items || []).forEach(x => {
+          const tr = document.createElement('tr');
+          const chgCls = Number(x.today_chg) >= 0 ? 'up' : 'down';
+          const avgCls = Number(x.avg_return_pct) >= 0 ? 'up' : 'down';
+          const detail = (x.days || []).map(r => `${r.date.slice(5)} 净流入${fmt(r.main_net_inflow_yi,2)}亿 / 收益${fmt(r.daily_return_pct,2)}%`).join('<br><span class="subline"></span>');
+          tr.innerHTML = `
+            <td>${x.code}</td>
+            <td>${x.name}</td>
+            <td>${fmt(x.price,2)}</td>
+            <td class="${chgCls}">${fmt(x.today_chg,2)}</td>
+            <td class="up">${fmt(x.sum_inflow_yi,2)}</td>
+            <td class="${avgCls}">${fmt(x.avg_return_pct,2)}</td>
+            <td><span class="subline">${detail}</span></td>
+          `;
+          tbody.appendChild(tr);
+        });
+      }catch(e){
+        meta.textContent = '';
+        err.textContent = e.message || '筛选失败';
+      }
+    }
+
+    loadData(0);
+  </script>
+</body>
+</html>

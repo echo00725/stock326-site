@@ -20,6 +20,7 @@ app.json.ensure_ascii = False
 DATA_FILE = Path(__file__).parent / "data" / "latest_recommendations.json"
 VALIDATION_FILE = Path(__file__).parent / "data" / "validation.json"
 LAST_RECOMMENDATIONS = None
+FLOW_DIVERGENCE_CACHE = {"ts": 0.0, "key": "", "payload": None}
 
 
 # ====== 通用 ======
@@ -312,6 +313,92 @@ def _fetch_main_net_inflow_30d(code: str, days: int = 30) -> dict:
             "sum": round(sum(x["main_net_inflow"] for x in rows), 2),
             "sum_yi": round(sum(x["main_net_inflow"] for x in rows) / 1e8, 4),
         },
+    }
+
+
+def _fetch_main_flow_days_brief(code: str, days: int = 3) -> list[dict]:
+    """仅取日线主力净流入与收益率（不叠加实时分钟数据），用于批量扫描加速。"""
+    url = "https://push2his.eastmoney.com/api/qt/stock/fflow/daykline/get"
+    params = {
+        "lmt": max(8, min(40, days + 8)),
+        "klt": 101,
+        "secid": _secid(code),
+        "fields1": "f1,f2,f3,f7",
+        "fields2": "f51,f52,f53,f54,f55,f56,f57,f58,f59,f60,f61,f62,f63",
+        "ut": "b2884a393a59ad64002292a3e90d46a5",
+    }
+    r = _rq_get(url, params=params, timeout=6, tries=2)
+    r.raise_for_status()
+    data = (r.json().get("data") or {})
+    klines = data.get("klines") or []
+    rows = []
+    for s in klines:
+        p = str(s).split(",")
+        if len(p) < 13:
+            continue
+        rows.append(
+            {
+                "date": p[0],
+                "main_net_inflow": float(p[1] or 0),
+                "main_net_inflow_yi": float(p[1] or 0) / 1e8,
+                "daily_return_pct": float(p[12] or 0),
+                "close": float(p[11] or 0),
+            }
+        )
+    return rows[-max(2, min(days, 5)) :]
+
+
+def _flow_divergence_scan(days: int = 3, max_scan: int = 120) -> dict:
+    start = time.time()
+    days = 2 if days == 2 else 3
+    max_scan = max(40, min(300, max_scan))
+
+    universe = _fetch_universe_realtime(limit_pages=12)
+    universe.sort(key=lambda x: x.get("amount", 0), reverse=True)
+    candidates = universe[:max_scan]
+
+    items = []
+    for u in candidates:
+        code = u["code"]
+        try:
+            tail = _fetch_main_flow_days_brief(code, days=days)
+        except Exception:
+            continue
+        if len(tail) < days:
+            continue
+
+        inflow_ok = all((x.get("main_net_inflow") or 0) > 0 for x in tail)
+        ret_ok = all((x.get("daily_return_pct") or 0) < 0 for x in tail)
+        if not (inflow_ok and ret_ok):
+            continue
+
+        sum_inflow_yi = round(sum(x.get("main_net_inflow_yi") or 0 for x in tail), 4)
+        avg_ret = round(sum(x.get("daily_return_pct") or 0 for x in tail) / days, 3)
+        items.append(
+            {
+                "code": code,
+                "name": u.get("name", ""),
+                "price": round(u.get("price") or 0, 2),
+                "today_chg": round(u.get("chg") or 0, 2),
+                "amount_yi": round((u.get("amount") or 0) / 1e8, 2),
+                "sum_inflow_yi": sum_inflow_yi,
+                "avg_return_pct": avg_ret,
+                "days": tail,
+            }
+        )
+
+    items.sort(key=lambda x: (x["sum_inflow_yi"], -x["avg_return_pct"]), reverse=True)
+    return {
+        "updated_at": _cn_now().strftime("%Y-%m-%d %H:%M:%S"),
+        "params": {"days": days, "max_scan": max_scan},
+        "scan_info": {
+            "universe_total": len(universe),
+            "candidates": len(candidates),
+            "matched": len(items),
+            "elapsed_sec": round(time.time() - start, 2),
+            "note": "为保证响应速度，默认按成交额扫描前N只股票；可在页面调整扫描范围。",
+        },
+        "items": items[:80],
     }
 
 
@@ -1001,6 +1088,35 @@ def volume_profile_page():
 @app.route("/main-net-inflow")
 def main_net_inflow_page():
     return render_template("main_net_inflow.html")
+
+
+@app.route("/flow-divergence")
+def flow_divergence_page():
+    return render_template("flow_divergence.html")
+
+
+@app.route("/api/flow-divergence")
+def api_flow_divergence():
+    global FLOW_DIVERGENCE_CACHE
+    days = int((request.args.get("days") or "3").strip() or 3)
+    max_scan = int((request.args.get("max_scan") or "120").strip() or 120)
+    force = (request.args.get("force") or "0") == "1"
+
+    days = 2 if days == 2 else 3
+    max_scan = max(40, min(300, max_scan))
+    cache_key = f"{days}:{max_scan}"
+
+    if not force and FLOW_DIVERGENCE_CACHE.get("key") == cache_key and time.time() - float(FLOW_DIVERGENCE_CACHE.get("ts") or 0) < 180:
+        payload = dict(FLOW_DIVERGENCE_CACHE.get("payload") or {})
+        payload["cached"] = True
+        return jsonify({"ok": True, "data": payload})
+
+    try:
+        data = _flow_divergence_scan(days=days, max_scan=max_scan)
+        FLOW_DIVERGENCE_CACHE = {"ts": time.time(), "key": cache_key, "payload": data}
+        return jsonify({"ok": True, "data": data})
+    except Exception as e:
+        return jsonify({"ok": False, "error": f"扫描失败：{e}"}), 500
 
 
 @app.route("/api/main-net-inflow")
