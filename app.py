@@ -26,6 +26,7 @@ FLOW_DIVERGENCE_CACHE = {"ts": 0.0, "key": "", "payload": None}
 FLOW_DIVERGENCE_JOBS = {}
 FLOW_DIVERGENCE_LOCK = threading.Lock()
 UNIVERSE_CACHE = {"ts": 0.0, "rows": []}
+UNIVERSE_CACHE_FILE = Path("/tmp/stock326_universe_cache.json")
 MAIN_INFLOW_CACHE = {}
 
 
@@ -156,6 +157,10 @@ def _fetch_universe_realtime(limit_pages: int = 12) -> list[dict]:
     out = [x for x in rows if x["price"] > 0 and x["amount"] > 0]
     if out:
         UNIVERSE_CACHE = {"ts": time.time(), "rows": out}
+        try:
+            UNIVERSE_CACHE_FILE.write_text(json.dumps({"ts": time.time(), "rows": out}, ensure_ascii=False))
+        except Exception:
+            pass
         return out
 
     # 备用1：尝试快速全市场抓取口径（不同分页参数）
@@ -180,14 +185,29 @@ def _fetch_universe_realtime(limit_pages: int = 12) -> list[dict]:
             ]
             if mapped:
                 UNIVERSE_CACHE = {"ts": time.time(), "rows": mapped}
+                try:
+                    UNIVERSE_CACHE_FILE.write_text(json.dumps({"ts": time.time(), "rows": mapped}, ensure_ascii=False))
+                except Exception:
+                    pass
                 return mapped
     except Exception:
         pass
 
-    # 备用2：回退最近缓存，保证服务不断
+    # 备用2：回退进程内缓存，保证服务不断
     cached = UNIVERSE_CACHE.get("rows") or []
     if cached:
         return cached
+
+    # 备用3：回退磁盘缓存（进程重启后也可用）
+    try:
+        if UNIVERSE_CACHE_FILE.exists():
+            obj = json.loads(UNIVERSE_CACHE_FILE.read_text() or "{}")
+            rows2 = obj.get("rows") or []
+            if rows2:
+                UNIVERSE_CACHE = {"ts": float(obj.get("ts") or time.time()), "rows": rows2}
+                return rows2
+    except Exception:
+        pass
 
     raise RuntimeError(f"实时快照全失败：ok_pages={ok_pages}/{limit_pages}; last_err={last_err}")
 
