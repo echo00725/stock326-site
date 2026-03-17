@@ -1138,9 +1138,13 @@ def api_flow_divergence():
 
     try:
         # 给接口整体一个硬超时，避免前端长时间卡住
-        with ThreadPoolExecutor(max_workers=1) as ex:
+        ex = ThreadPoolExecutor(max_workers=1)
+        try:
             fut = ex.submit(_flow_divergence_scan, days, max_scan)
-            data = fut.result(timeout=12)
+            data = fut.result(timeout=10)
+        finally:
+            # 关键：超时时不要等待后台线程结束，否则接口仍会卡住
+            ex.shutdown(wait=False, cancel_futures=True)
         FLOW_DIVERGENCE_CACHE = {"ts": time.time(), "key": cache_key, "payload": data}
         return jsonify({"ok": True, "data": data})
     except TimeoutError:
