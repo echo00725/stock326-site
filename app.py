@@ -355,13 +355,32 @@ def _flow_divergence_scan(days: int = 3, max_scan: int = 120) -> dict:
     days = 2 if days == 2 else 3
     max_scan = max(40, min(300, max_scan))
 
-    # Serverless 环境下限制扫描量，避免函数超时
-    if os.getenv("VERCEL"):
-        max_scan = min(max_scan, 80)
-
+    # 1) 先用单次快照预筛（今日主力净流入>0 且 今日涨跌<0），显著降低后续逐股请求量
     universe = _fetch_universe_realtime(limit_pages=12)
-    universe.sort(key=lambda x: x.get("amount", 0), reverse=True)
-    candidates = universe[:max_scan]
+    pre = [u for u in universe if (u.get("chg") or 0) < 0]
+    pre.sort(key=lambda x: x.get("amount", 0), reverse=True)
+    pre = pre[:max_scan]
+
+    # 再通过个股快照校验“今日主力净流入>0”，减少无效历史拉取
+    hot = []
+    for u in pre:
+        try:
+            secid = _secid(u["code"])
+            snap = _rq_get(
+                "https://push2.eastmoney.com/api/qt/stock/get",
+                params={"secid": secid, "fields": "f62", "ut": "fa5fd1943c7b386f172d6893dbfba10b"},
+                timeout=2,
+                tries=1,
+            )
+            snap.raise_for_status()
+            f62 = float(((snap.json().get("data") or {}).get("f62")) or 0)
+            if f62 > 0:
+                hot.append(u)
+        except Exception:
+            continue
+
+    # 控制逐日资金流查询规模，保障线上稳定响应
+    candidates = hot[: min(len(hot), 60 if os.getenv("VERCEL") else 120)]
 
     def worker(u: dict):
         code = u["code"]
@@ -388,9 +407,8 @@ def _flow_divergence_scan(days: int = 3, max_scan: int = 120) -> dict:
     items = []
     checked = 0
     errs = 0
-    # 并行请求+软超时，优先返回可用结果而不是挂死
-    soft_budget = 6.5 if os.getenv("VERCEL") else 12
-    workers = 16 if os.getenv("VERCEL") else 24
+    soft_budget = 8 if os.getenv("VERCEL") else 14
+    workers = 12 if os.getenv("VERCEL") else 20
     ex = ThreadPoolExecutor(max_workers=workers)
     try:
         futs = [ex.submit(worker, u) for u in candidates]
@@ -403,9 +421,7 @@ def _flow_divergence_scan(days: int = 3, max_scan: int = 120) -> dict:
                         items.append(row)
                 except Exception:
                     errs += 1
-                    continue
         except TimeoutError:
-            # 到达软超时：直接返回当前已完成的结果
             pass
     finally:
         ex.shutdown(wait=False, cancel_futures=True)
@@ -416,12 +432,14 @@ def _flow_divergence_scan(days: int = 3, max_scan: int = 120) -> dict:
         "params": {"days": days, "max_scan": max_scan},
         "scan_info": {
             "universe_total": len(universe),
+            "prefilter_neg_chg": len(pre),
+            "prefilter_flow_pos": len(hot),
             "candidates": len(candidates),
             "checked": checked,
             "errors": errs,
             "matched": len(items),
             "elapsed_sec": round(time.time() - start, 2),
-            "note": "云端采用并行+软超时，若行情源限流会返回部分结果；可点刷新重试。",
+            "note": "先预筛后逐日校验，优先保证线上可连通与可返回。",
         },
         "items": items[:80],
     }
