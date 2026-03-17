@@ -361,26 +361,8 @@ def _flow_divergence_scan(days: int = 3, max_scan: int = 120) -> dict:
     pre.sort(key=lambda x: x.get("amount", 0), reverse=True)
     pre = pre[:max_scan]
 
-    # 再通过个股快照校验“今日主力净流入>0”，减少无效历史拉取
-    hot = []
-    for u in pre:
-        try:
-            secid = _secid(u["code"])
-            snap = _rq_get(
-                "https://push2.eastmoney.com/api/qt/stock/get",
-                params={"secid": secid, "fields": "f62", "ut": "fa5fd1943c7b386f172d6893dbfba10b"},
-                timeout=2,
-                tries=1,
-            )
-            snap.raise_for_status()
-            f62 = float(((snap.json().get("data") or {}).get("f62")) or 0)
-            if f62 > 0:
-                hot.append(u)
-        except Exception:
-            continue
-
-    # 控制逐日资金流查询规模，保障线上稳定响应
-    candidates = hot[: min(len(hot), 60 if os.getenv("VERCEL") else 120)]
+    # 直接取高流动性的负收益样本进入逐日校验，避免串行快照请求导致超时
+    candidates = pre[: min(len(pre), 60 if os.getenv("VERCEL") else 120)]
 
     def worker(u: dict):
         code = u["code"]
@@ -433,7 +415,6 @@ def _flow_divergence_scan(days: int = 3, max_scan: int = 120) -> dict:
         "scan_info": {
             "universe_total": len(universe),
             "prefilter_neg_chg": len(pre),
-            "prefilter_flow_pos": len(hot),
             "candidates": len(candidates),
             "checked": checked,
             "errors": errs,
