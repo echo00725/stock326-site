@@ -7,6 +7,7 @@ import math
 import os
 import random
 import time
+import threading
 from concurrent.futures import ThreadPoolExecutor, as_completed, TimeoutError
 from pathlib import Path
 
@@ -22,6 +23,8 @@ DATA_FILE = Path(__file__).parent / "data" / "latest_recommendations.json"
 VALIDATION_FILE = Path(__file__).parent / "data" / "validation.json"
 LAST_RECOMMENDATIONS = None
 FLOW_DIVERGENCE_CACHE = {"ts": 0.0, "key": "", "payload": None}
+FLOW_DIVERGENCE_JOBS = {}
+FLOW_DIVERGENCE_LOCK = threading.Lock()
 MAIN_INFLOW_CACHE = {}
 
 
@@ -1120,9 +1123,47 @@ def flow_divergence_page():
     return render_template("flow_divergence.html")
 
 
+def _start_flow_divergence_job(cache_key: str, days: int, max_scan: int):
+    with FLOW_DIVERGENCE_LOCK:
+        st = FLOW_DIVERGENCE_JOBS.get(cache_key) or {}
+        if st.get("running"):
+            return
+        FLOW_DIVERGENCE_JOBS[cache_key] = {
+            "running": True,
+            "started_at": _cn_now().strftime("%Y-%m-%d %H:%M:%S"),
+            "last_error": None,
+            "last_ok": st.get("last_ok"),
+            "last_done_at": st.get("last_done_at"),
+        }
+
+    def worker():
+        global FLOW_DIVERGENCE_CACHE
+        try:
+            data = _flow_divergence_scan(days=days, max_scan=max_scan)
+            FLOW_DIVERGENCE_CACHE = {"ts": time.time(), "key": cache_key, "payload": data}
+            with FLOW_DIVERGENCE_LOCK:
+                FLOW_DIVERGENCE_JOBS[cache_key] = {
+                    "running": False,
+                    "started_at": FLOW_DIVERGENCE_JOBS.get(cache_key, {}).get("started_at"),
+                    "last_error": None,
+                    "last_ok": True,
+                    "last_done_at": _cn_now().strftime("%Y-%m-%d %H:%M:%S"),
+                }
+        except Exception as e:
+            with FLOW_DIVERGENCE_LOCK:
+                FLOW_DIVERGENCE_JOBS[cache_key] = {
+                    "running": False,
+                    "started_at": FLOW_DIVERGENCE_JOBS.get(cache_key, {}).get("started_at"),
+                    "last_error": str(e),
+                    "last_ok": False,
+                    "last_done_at": _cn_now().strftime("%Y-%m-%d %H:%M:%S"),
+                }
+
+    threading.Thread(target=worker, daemon=True).start()
+
+
 @app.route("/api/flow-divergence")
 def api_flow_divergence():
-    global FLOW_DIVERGENCE_CACHE
     days = int((request.args.get("days") or "3").strip() or 3)
     max_scan = int((request.args.get("max_scan") or "120").strip() or 120)
     force = (request.args.get("force") or "0") == "1"
@@ -1131,61 +1172,35 @@ def api_flow_divergence():
     max_scan = max(20, min(300, max_scan))
     cache_key = f"{days}:{max_scan}"
 
-    if not force and FLOW_DIVERGENCE_CACHE.get("key") == cache_key and time.time() - float(FLOW_DIVERGENCE_CACHE.get("ts") or 0) < 180:
-        payload = dict(FLOW_DIVERGENCE_CACHE.get("payload") or {})
-        payload["cached"] = True
-        return jsonify({"ok": True, "data": payload})
+    # 首次访问或强制刷新：后台异步重算，不阻塞当前请求
+    if force or FLOW_DIVERGENCE_CACHE.get("key") != cache_key:
+        _start_flow_divergence_job(cache_key, days, max_scan)
 
-    try:
-        # 给接口整体一个硬超时，避免前端长时间卡住
-        ex = ThreadPoolExecutor(max_workers=1)
-        try:
-            fut = ex.submit(_flow_divergence_scan, days, max_scan)
-            data = fut.result(timeout=10)
-        finally:
-            # 关键：超时时不要等待后台线程结束，否则接口仍会卡住
-            ex.shutdown(wait=False, cancel_futures=True)
-        FLOW_DIVERGENCE_CACHE = {"ts": time.time(), "key": cache_key, "payload": data}
-        return jsonify({"ok": True, "data": data})
-    except TimeoutError:
-        cached = FLOW_DIVERGENCE_CACHE.get("payload") if FLOW_DIVERGENCE_CACHE.get("key") == cache_key else None
-        if cached:
-            payload = dict(cached)
-            payload["degraded"] = True
-            return jsonify({"ok": True, "degraded": True, "message": "实时扫描超时，已返回最近缓存结果。", "data": payload})
-        fallback = {
-            "updated_at": _cn_now().strftime("%Y-%m-%d %H:%M:%S"),
-            "params": {"days": days, "max_scan": max_scan},
-            "scan_info": {
-                "universe_total": 0,
-                "candidates": 0,
-                "checked": 0,
-                "errors": 1,
-                "matched": 0,
-                "elapsed_sec": 0,
-                "note": "实时扫描超时，已降级为空结果。",
-            },
-            "items": [],
-            "degraded": True,
-        }
-        return jsonify({"ok": True, "degraded": True, "message": "实时扫描超时", "data": fallback})
-    except Exception as e:
-        fallback = {
-            "updated_at": _cn_now().strftime("%Y-%m-%d %H:%M:%S"),
-            "params": {"days": days, "max_scan": max_scan},
-            "scan_info": {
-                "universe_total": 0,
-                "candidates": 0,
-                "checked": 0,
-                "errors": 1,
-                "matched": 0,
-                "elapsed_sec": 0,
-                "note": "实时数据源异常，已降级为空结果，可稍后重试。",
-            },
-            "items": [],
-            "degraded": True,
-        }
-        return jsonify({"ok": True, "degraded": True, "message": f"数据源异常：{e}", "data": fallback})
+    with FLOW_DIVERGENCE_LOCK:
+        st = dict(FLOW_DIVERGENCE_JOBS.get(cache_key) or {"running": False, "last_error": None, "last_ok": None, "last_done_at": None})
+
+    cached = FLOW_DIVERGENCE_CACHE.get("payload") if FLOW_DIVERGENCE_CACHE.get("key") == cache_key else None
+    if cached:
+        payload = dict(cached)
+        payload["cached"] = True
+        return jsonify({"ok": True, "data": payload, "job": st})
+
+    # 无缓存也保证秒回：返回结构化空数据 + 作业状态（running/failed）
+    empty = {
+        "updated_at": _cn_now().strftime("%Y-%m-%d %H:%M:%S"),
+        "params": {"days": days, "max_scan": max_scan},
+        "scan_info": {
+            "universe_total": 0,
+            "candidates": 0,
+            "checked": 0,
+            "errors": 0,
+            "matched": 0,
+            "elapsed_sec": 0,
+            "note": "后台正在计算完整结果，请稍后刷新。",
+        },
+        "items": [],
+    }
+    return jsonify({"ok": True, "data": empty, "job": st})
 
 
 @app.route("/api/main-net-inflow")
