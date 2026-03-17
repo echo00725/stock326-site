@@ -22,6 +22,7 @@ DATA_FILE = Path(__file__).parent / "data" / "latest_recommendations.json"
 VALIDATION_FILE = Path(__file__).parent / "data" / "validation.json"
 LAST_RECOMMENDATIONS = None
 FLOW_DIVERGENCE_CACHE = {"ts": 0.0, "key": "", "payload": None}
+MAIN_INFLOW_CACHE = {}
 
 
 # ====== 通用 ======
@@ -1145,15 +1146,35 @@ def api_flow_divergence():
 
 @app.route("/api/main-net-inflow")
 def api_main_net_inflow():
+    global MAIN_INFLOW_CACHE
     code = (request.args.get("code") or "").strip()
     days = int((request.args.get("days") or "30").strip() or 30)
     if not code or not code.isdigit() or len(code) != 6:
         return jsonify({"ok": False, "error": "请输入6位A股代码"}), 400
+
+    key = f"{code}:{days}"
     try:
         data = _fetch_main_net_inflow_30d(code=code, days=days)
+        MAIN_INFLOW_CACHE[key] = {"ts": time.time(), "data": data}
         return jsonify({"ok": True, "data": data})
     except Exception as e:
-        return jsonify({"ok": False, "error": f"获取主力净流入失败：{e}"}), 500
+        cached = MAIN_INFLOW_CACHE.get(key)
+        if cached and (time.time() - float(cached.get("ts") or 0) < 3600):
+            payload = dict(cached.get("data") or {})
+            payload["degraded"] = True
+            return jsonify({"ok": True, "degraded": True, "message": f"实时源异常，已回退1小时内缓存：{e}", "data": payload})
+
+        # 无缓存时仍返回可用结构，避免前端整页报错
+        empty = {
+            "code": code,
+            "name": "",
+            "market": None,
+            "days": 0,
+            "rows": [],
+            "summary": {"sum": 0, "sum_yi": 0},
+            "degraded": True,
+        }
+        return jsonify({"ok": True, "degraded": True, "message": f"数据源连接中断，请稍后重试（{e}）", "data": empty})
 
 
 @app.route("/api/volume-profile")

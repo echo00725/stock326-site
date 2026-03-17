@@ -52,6 +52,7 @@
       </div>
       <p id="meta" class="muted"></p>
       <p id="rt" class="muted"></p>
+      <p id="warn" class="muted" style="color:#b45309"></p>
       <p id="err" style="color:#b91c1c"></p>
 
       <div class="chart-card">
@@ -198,9 +199,11 @@
       const days = document.getElementById('days').value;
       const meta = document.getElementById('meta');
       const err = document.getElementById('err');
+      const warn = document.getElementById('warn');
       const rt = document.getElementById('rt');
       const tbody = document.getElementById('tbody');
       err.textContent = '';
+      warn.textContent = '';
       rt.textContent = '';
       meta.textContent = '加载中...';
       tbody.innerHTML = '';
@@ -220,6 +223,9 @@
 
         const d = json.data;
         const rowsAsc = (d.rows || []).slice();
+        if(json.degraded || d.degraded){
+          warn.textContent = json.message || '数据源临时异常，当前显示为空或缓存数据。';
+        }
         const last = rowsAsc.length ? rowsAsc[rowsAsc.length - 1] : null;
         const rtTag = last && last.is_realtime ? ` | 数据时间: ${last.ts || last.date}` : ' | 当前为日线收盘数据';
         meta.textContent = `代码: ${d.code} ${d.name || ''} | 天数: ${d.days} | 区间合计净流入: ${fmtNum(d.summary.sum_yi)} 亿元${rtTag}`;
