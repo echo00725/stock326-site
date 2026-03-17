@@ -7,6 +7,7 @@ import math
 import os
 import random
 import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
 import pytz
@@ -353,39 +354,58 @@ def _flow_divergence_scan(days: int = 3, max_scan: int = 120) -> dict:
     days = 2 if days == 2 else 3
     max_scan = max(40, min(300, max_scan))
 
+    # Serverless 环境下限制扫描量，避免函数超时
+    if os.getenv("VERCEL"):
+        max_scan = min(max_scan, 80)
+
     universe = _fetch_universe_realtime(limit_pages=12)
     universe.sort(key=lambda x: x.get("amount", 0), reverse=True)
     candidates = universe[:max_scan]
 
-    items = []
-    for u in candidates:
+    def worker(u: dict):
         code = u["code"]
-        try:
-            tail = _fetch_main_flow_days_brief(code, days=days)
-        except Exception:
-            continue
+        tail = _fetch_main_flow_days_brief(code, days=days)
         if len(tail) < days:
-            continue
-
+            return None
         inflow_ok = all((x.get("main_net_inflow") or 0) > 0 for x in tail)
         ret_ok = all((x.get("daily_return_pct") or 0) < 0 for x in tail)
         if not (inflow_ok and ret_ok):
-            continue
-
+            return None
         sum_inflow_yi = round(sum(x.get("main_net_inflow_yi") or 0 for x in tail), 4)
         avg_ret = round(sum(x.get("daily_return_pct") or 0 for x in tail) / days, 3)
-        items.append(
-            {
-                "code": code,
-                "name": u.get("name", ""),
-                "price": round(u.get("price") or 0, 2),
-                "today_chg": round(u.get("chg") or 0, 2),
-                "amount_yi": round((u.get("amount") or 0) / 1e8, 2),
-                "sum_inflow_yi": sum_inflow_yi,
-                "avg_return_pct": avg_ret,
-                "days": tail,
-            }
-        )
+        return {
+            "code": code,
+            "name": u.get("name", ""),
+            "price": round(u.get("price") or 0, 2),
+            "today_chg": round(u.get("chg") or 0, 2),
+            "amount_yi": round((u.get("amount") or 0) / 1e8, 2),
+            "sum_inflow_yi": sum_inflow_yi,
+            "avg_return_pct": avg_ret,
+            "days": tail,
+        }
+
+    items = []
+    checked = 0
+    errs = 0
+    # 并行请求+软超时，优先返回可用结果而不是挂死
+    deadline = start + (7.5 if os.getenv("VERCEL") else 14)
+    workers = 10 if os.getenv("VERCEL") else 16
+    ex = ThreadPoolExecutor(max_workers=workers)
+    try:
+        futs = [ex.submit(worker, u) for u in candidates]
+        for fut in as_completed(futs):
+            if time.time() > deadline:
+                break
+            checked += 1
+            try:
+                row = fut.result()
+                if row:
+                    items.append(row)
+            except Exception:
+                errs += 1
+                continue
+    finally:
+        ex.shutdown(wait=False, cancel_futures=True)
 
     items.sort(key=lambda x: (x["sum_inflow_yi"], -x["avg_return_pct"]), reverse=True)
     return {
@@ -394,9 +414,11 @@ def _flow_divergence_scan(days: int = 3, max_scan: int = 120) -> dict:
         "scan_info": {
             "universe_total": len(universe),
             "candidates": len(candidates),
+            "checked": checked,
+            "errors": errs,
             "matched": len(items),
             "elapsed_sec": round(time.time() - start, 2),
-            "note": "为保证响应速度，默认按成交额扫描前N只股票；可在页面调整扫描范围。",
+            "note": "云端采用并行+软超时，若行情源限流会返回部分结果；可点刷新重试。",
         },
         "items": items[:80],
     }
