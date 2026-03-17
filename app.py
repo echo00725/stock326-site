@@ -1137,9 +1137,34 @@ def api_flow_divergence():
         return jsonify({"ok": True, "data": payload})
 
     try:
-        data = _flow_divergence_scan(days=days, max_scan=max_scan)
+        # 给接口整体一个硬超时，避免前端长时间卡住
+        with ThreadPoolExecutor(max_workers=1) as ex:
+            fut = ex.submit(_flow_divergence_scan, days, max_scan)
+            data = fut.result(timeout=12)
         FLOW_DIVERGENCE_CACHE = {"ts": time.time(), "key": cache_key, "payload": data}
         return jsonify({"ok": True, "data": data})
+    except TimeoutError:
+        cached = FLOW_DIVERGENCE_CACHE.get("payload") if FLOW_DIVERGENCE_CACHE.get("key") == cache_key else None
+        if cached:
+            payload = dict(cached)
+            payload["degraded"] = True
+            return jsonify({"ok": True, "degraded": True, "message": "实时扫描超时，已返回最近缓存结果。", "data": payload})
+        fallback = {
+            "updated_at": _cn_now().strftime("%Y-%m-%d %H:%M:%S"),
+            "params": {"days": days, "max_scan": max_scan},
+            "scan_info": {
+                "universe_total": 0,
+                "candidates": 0,
+                "checked": 0,
+                "errors": 1,
+                "matched": 0,
+                "elapsed_sec": 0,
+                "note": "实时扫描超时，已降级为空结果。",
+            },
+            "items": [],
+            "degraded": True,
+        }
+        return jsonify({"ok": True, "degraded": True, "message": "实时扫描超时", "data": fallback})
     except Exception as e:
         fallback = {
             "updated_at": _cn_now().strftime("%Y-%m-%d %H:%M:%S"),
