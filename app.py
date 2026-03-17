@@ -8,7 +8,7 @@ import os
 import random
 import time
 import threading
-from concurrent.futures import ThreadPoolExecutor, as_completed, TimeoutError
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
 import pytz
@@ -449,24 +449,20 @@ def _flow_divergence_scan(days: int = 3, max_scan: int = 120) -> dict:
     items = []
     checked = 0
     errs = 0
-    soft_budget = 4.5 if os.getenv("VERCEL") else 6.5
     workers = 8 if os.getenv("VERCEL") else 10
     ex = ThreadPoolExecutor(max_workers=workers)
     try:
         futs = [ex.submit(worker, u) for u in candidates]
-        try:
-            for fut in as_completed(futs, timeout=soft_budget):
-                checked += 1
-                try:
-                    row = fut.result()
-                    if row:
-                        items.append(row)
-                except Exception:
-                    errs += 1
-        except TimeoutError:
-            pass
+        for fut in as_completed(futs):
+            checked += 1
+            try:
+                row = fut.result()
+                if row:
+                    items.append(row)
+            except Exception:
+                errs += 1
     finally:
-        ex.shutdown(wait=False, cancel_futures=True)
+        ex.shutdown(wait=True)
 
     items.sort(key=lambda x: (x["sum_inflow_yi"], -x["avg_return_pct"]), reverse=True)
     return {

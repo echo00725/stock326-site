@@ -76,10 +76,7 @@
       err.textContent = '';
 
       try{
-        const ctrl = new AbortController();
-        const timer = setTimeout(() => ctrl.abort(), 240000);
-        const res = await fetch(`/api/flow-divergence?days=${days}&max_scan=${maxScan}&force=${force}`, { signal: ctrl.signal });
-        clearTimeout(timer);
+        const res = await fetch(`/api/flow-divergence?days=${days}&max_scan=${maxScan}&force=${force}`);
         const json = await res.json();
         if(!res.ok || !json.ok) throw new Error(json.error || '筛选失败');
 
