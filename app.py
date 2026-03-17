@@ -27,6 +27,7 @@ FLOW_DIVERGENCE_JOBS = {}
 FLOW_DIVERGENCE_LOCK = threading.Lock()
 UNIVERSE_CACHE = {"ts": 0.0, "rows": []}
 UNIVERSE_CACHE_FILE = Path("/tmp/stock326_universe_cache.json")
+FLOW_DIVERGENCE_CACHE_FILE = Path("/tmp/stock326_flow_divergence_cache.json")
 MAIN_INFLOW_CACHE = {}
 
 
@@ -1175,6 +1176,21 @@ def flow_divergence_page():
     return render_template("flow_divergence.html")
 
 
+def _load_flow_divergence_cache_from_disk(cache_key: str):
+    try:
+        if not FLOW_DIVERGENCE_CACHE_FILE.exists():
+            return None
+        obj = json.loads(FLOW_DIVERGENCE_CACHE_FILE.read_text() or "{}")
+        if obj.get("key") != cache_key:
+            return None
+        payload = obj.get("payload")
+        if payload:
+            return {"ts": float(obj.get("ts") or time.time()), "key": cache_key, "payload": payload}
+    except Exception:
+        return None
+    return None
+
+
 def _start_flow_divergence_job(cache_key: str, days: int, max_scan: int):
     with FLOW_DIVERGENCE_LOCK:
         st = FLOW_DIVERGENCE_JOBS.get(cache_key) or {}
@@ -1226,6 +1242,12 @@ def api_flow_divergence():
     max_scan = max(20, min(300, max_scan))
     cache_key = f"{days}:{max_scan}"
 
+    # 启动时尝试从磁盘恢复缓存
+    if FLOW_DIVERGENCE_CACHE.get("key") != cache_key:
+        disk = _load_flow_divergence_cache_from_disk(cache_key)
+        if disk:
+            FLOW_DIVERGENCE_CACHE = disk
+
     # 非强刷优先返回最近缓存（3分钟），减少重复压测上游
     if not force and FLOW_DIVERGENCE_CACHE.get("key") == cache_key and time.time() - float(FLOW_DIVERGENCE_CACHE.get("ts") or 0) < 180:
         payload = dict(FLOW_DIVERGENCE_CACHE.get("payload") or {})
@@ -1235,10 +1257,19 @@ def api_flow_divergence():
     try:
         data = _flow_divergence_scan(days=days, max_scan=max_scan)
         FLOW_DIVERGENCE_CACHE = {"ts": time.time(), "key": cache_key, "payload": data}
+        try:
+            FLOW_DIVERGENCE_CACHE_FILE.write_text(json.dumps(FLOW_DIVERGENCE_CACHE, ensure_ascii=False))
+        except Exception:
+            pass
         return jsonify({"ok": True, "data": data})
     except Exception as e:
-        # 出错时优先回退到最近缓存，保证可用性
+        # 出错时优先回退到最近缓存（内存/磁盘）
         cached = FLOW_DIVERGENCE_CACHE.get("payload") if FLOW_DIVERGENCE_CACHE.get("key") == cache_key else None
+        if not cached:
+            disk = _load_flow_divergence_cache_from_disk(cache_key)
+            if disk:
+                FLOW_DIVERGENCE_CACHE = disk
+                cached = disk.get("payload")
         if cached:
             payload = dict(cached)
             payload["degraded"] = True
