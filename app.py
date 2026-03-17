@@ -363,7 +363,7 @@ def _flow_divergence_scan(days: int = 3, max_scan: int = 120) -> dict:
     pre = pre[:max_scan]
 
     # 直接取高流动性的负收益样本进入逐日校验，避免串行快照请求导致超时
-    candidates = pre[: min(len(pre), 60 if os.getenv("VERCEL") else 120)]
+    candidates = pre[: min(len(pre), 30 if os.getenv("VERCEL") else 45)]
 
     def worker(u: dict):
         code = u["code"]
@@ -390,8 +390,8 @@ def _flow_divergence_scan(days: int = 3, max_scan: int = 120) -> dict:
     items = []
     checked = 0
     errs = 0
-    soft_budget = 8 if os.getenv("VERCEL") else 14
-    workers = 12 if os.getenv("VERCEL") else 20
+    soft_budget = 4.5 if os.getenv("VERCEL") else 6.5
+    workers = 8 if os.getenv("VERCEL") else 10
     ex = ThreadPoolExecutor(max_workers=workers)
     try:
         futs = [ex.submit(worker, u) for u in candidates]
