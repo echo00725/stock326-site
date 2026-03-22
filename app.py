@@ -103,17 +103,48 @@ def fallback_rankings() -> dict:
     }
 
 
+def _load_latest_nonempty_industry_from_history() -> list[dict]:
+    try:
+        hist_dir = DATA_DIR / "history"
+        if not hist_dir.exists():
+            return []
+        files = sorted(hist_dir.glob("*.json"), reverse=True)
+        for fp in files[:40]:  # 仅回看最近40天，避免扫描过重
+            d = load_json(fp, {})
+            flow = d.get("industry_flow") or []
+            if flow:
+                return flow
+    except Exception:
+        pass
+    return []
+
+
 def _fill_industry_flow_if_missing(data: dict | None) -> dict:
     data = dict(data or {})
     if data.get("industry_flow"):
         return data
 
-    # 优先在线补齐；失败时尽量回退上次缓存里的行业数据
+    # 兜底顺序：在线拉取 -> 当前缓存 -> 历史最近非空 -> 内置默认
     try:
-        data["industry_flow"] = _fetch_industry_flow_top10()
+        flow = _fetch_industry_flow_top10()
+        if flow:
+            data["industry_flow"] = flow
+            return data
     except Exception:
-        cached = load_json(DATA_FILE, {})
-        data["industry_flow"] = cached.get("industry_flow") or []
+        pass
+
+    cached = load_json(DATA_FILE, {})
+    flow = cached.get("industry_flow") or []
+    if flow:
+        data["industry_flow"] = flow
+        return data
+
+    flow = _load_latest_nonempty_industry_from_history()
+    if flow:
+        data["industry_flow"] = flow
+        return data
+
+    data["industry_flow"] = fallback_rankings().get("industry_flow") or []
     return data
 
 
@@ -540,7 +571,10 @@ def _real_rankings() -> dict:
     try:
         industry_flow = _fetch_industry_flow_top10()
     except Exception:
-        industry_flow = load_json(DATA_FILE, {}).get("industry_flow") or []
+        industry_flow = []
+
+    if not industry_flow:
+        industry_flow = _fill_industry_flow_if_missing({"industry_flow": []}).get("industry_flow") or []
 
     return {
         "updated_at": now,
@@ -719,6 +753,7 @@ def run_daily_job():
     out = _real_rankings()
     if not out.get("picks"):
         raise RuntimeError("实时计算结果为空")
+    out = _fill_industry_flow_if_missing(out)
     save_json(DATA_FILE, out)
     return out
 
