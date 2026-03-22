@@ -515,7 +515,7 @@ def _flow_divergence_scan(days: int = 3, max_scan: int = 120) -> dict:
 
     items.sort(key=lambda x: (x["sum_inflow_yi"], -x["avg_return_pct"]), reverse=True)
     return {
-        "updated_at": _cn_now().strftime("%Y-%m-%d %H:%M:%S"),
+        "updated_at": updated,
         "params": {"days": days, "max_scan": max_scan},
         "scan_info": {
             "universe_total": len(universe),
@@ -1398,7 +1398,8 @@ def _policy_catalog() -> dict:
     lpr = live.get("lpr") or {}
     mlf = live.get("mlf") or {}
     notices = _policy_latest_notices()
-    return {
+    updated = _cn_now().strftime("%Y-%m-%d %H:%M:%S")
+    data = {
         "updated_at": _cn_now().strftime("%Y-%m-%d %H:%M:%S"),
         "fiscal": [
             {
@@ -1551,6 +1552,39 @@ def _policy_catalog() -> dict:
             },
         ],
     }
+
+    notice_map = {
+        "赤字率与财政扩张": notices.get("fiscal", {}),
+        "专项债": notices.get("fiscal", {}),
+        "超长期特别国债": notices.get("bond", {}),
+        "减税降费": notices.get("tax", {}),
+        "转移支付": notices.get("fiscal", {}),
+        "降准(RRR)": notices.get("rrr", {}),
+        "政策利率(7天逆回购/MLF)": notices.get("rrr", {}),
+        "LPR": notices.get("rrr", {}),
+        "OMO逆回购": notices.get("rrr", {}),
+        "再贷款再贴现": notices.get("reloan", {}),
+        "PSL/结构性工具": notices.get("psl", {}),
+    }
+
+    for grp in ["fiscal", "monetary", "combo"]:
+        for it in data.get(grp, []):
+            rows = list(it.get("table") or [])
+            n = notice_map.get(it.get("name", ""), {})
+            extras = [
+                {"metric": "数据更新时间", "latest": updated, "freq": "实时", "source": "系统"},
+                {"metric": "最新公告标题", "latest": n.get("title") or "暂无", "freq": "滚动", "source": n.get("url") or n.get("source") or "官方渠道"},
+                {"metric": "最新公告日期", "latest": n.get("date") or "暂无", "freq": "滚动", "source": n.get("source") or "官方渠道"},
+                {"metric": "公告关键数字", "latest": n.get("fig") or "暂无", "freq": "滚动", "source": n.get("url") or "官方渠道"},
+                {"metric": "政策来源", "latest": n.get("source") or "官方渠道", "freq": "滚动", "source": n.get("url") or "官方渠道"},
+            ]
+            for e in extras:
+                if len(rows) >= 5:
+                    break
+                rows.append(e)
+            it["table"] = rows[:5]
+
+    return data
 
 
 def _scrape_links(url: str, source: str, max_items: int = 8) -> list[dict]:

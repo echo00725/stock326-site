@@ -88,10 +88,8 @@ function renderList(key){
           <h3 class="title">${r.name || ''}</h3>
           <div class="kpis">${chips.map(c=>`<span class="kpi">${c}</span>`).join('')}</div>
         </div>
-        <p><strong>定义：</strong>${r.desc || '-'}</p>
-        <p class="muted">传导：${r.mechanism || '-'} ｜ 影响：${r.impact || '-'}</p>
         <table>
-          <thead><tr><th style="width:22%">指标</th><th>具体数据</th><th style="width:12%">频率</th><th style="width:16%">来源</th></tr></thead>
+          <thead><tr><th style="width:24%">核心指标</th><th>核心数据</th><th style="width:12%">频率</th><th style="width:14%">来源</th></tr></thead>
           <tbody>
             ${tableRows.map(x=>`<tr><td>${x.metric||'-'}</td><td>${x.latest||'-'}</td><td>${x.freq||'-'}</td><td>${sourceCell(x.source||'')}</td></tr>`).join('')}
           </tbody>
