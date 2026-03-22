@@ -6,6 +6,7 @@ import json
 import math
 import os
 import random
+import re
 import time
 import threading
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -19,8 +20,9 @@ from flask import Flask, jsonify, render_template, request
 app = Flask(__name__)
 app.json.ensure_ascii = False
 
-DATA_FILE = Path(__file__).parent / "data" / "latest_recommendations.json"
-VALIDATION_FILE = Path(__file__).parent / "data" / "validation.json"
+DATA_DIR = Path(__file__).parent / "data"
+DATA_FILE = DATA_DIR / "latest_recommendations.json"
+VALIDATION_FILE = DATA_DIR / "validation.json"
 LAST_RECOMMENDATIONS = None
 FLOW_DIVERGENCE_CACHE = {"ts": 0.0, "key": "", "payload": None}
 FLOW_DIVERGENCE_JOBS = {}
@@ -1193,6 +1195,105 @@ def api_market_pulse():
 @app.route("/api/validation")
 def api_validation():
     return jsonify(load_json(VALIDATION_FILE, {}))
+
+
+def _policy_catalog() -> dict:
+    return {
+        "updated_at": _cn_now().strftime("%Y-%m-%d %H:%M:%S"),
+        "fiscal": [
+            {"name": "赤字率与财政扩张", "desc": "通过提高赤字率扩大总需求，稳增长稳就业", "signals": ["预算赤字率", "广义财政支出增速", "专项债发行进度"]},
+            {"name": "专项债", "desc": "面向基建与重大项目，形成实物工作量", "signals": ["新增专项债额度", "投向结构", "项目开工率"]},
+            {"name": "超长期特别国债", "desc": "支持国家重大战略与安全能力建设", "signals": ["发行规模", "期限结构", "资金投向"]},
+            {"name": "减税降费", "desc": "降低企业与居民负担，改善现金流和预期", "signals": ["税费减免规模", "制造业税负", "小微企业税收优惠覆盖"]},
+            {"name": "转移支付", "desc": "中央向地方和重点领域定向支持", "signals": ["一般性转移支付", "均衡性转移支付", "民生类支出占比"]},
+        ],
+        "monetary": [
+            {"name": "降准(RRR)", "desc": "释放长期资金，改善银行体系流动性", "signals": ["法定准备金率", "中长期流动性缺口", "银行负债成本"]},
+            {"name": "政策利率(7天逆回购/MLF)", "desc": "引导市场利率中枢，影响融资成本", "signals": ["7天逆回购利率", "MLF利率", "DR007"]},
+            {"name": "LPR", "desc": "贷款定价基准，传导至企业和居民贷款", "signals": ["1年LPR", "5年LPR", "新发放贷款利率"]},
+            {"name": "OMO逆回购", "desc": "短端流动性调节，平滑资金面波动", "signals": ["净投放规模", "到期量", "货币市场利率"]},
+            {"name": "再贷款再贴现", "desc": "结构性支持科创、小微、绿色等方向", "signals": ["工具额度", "投向占比", "加权融资成本"]},
+            {"name": "PSL/结构性工具", "desc": "定向支持重点领域与三大工程等", "signals": ["新增PSL", "结构性货币工具余额", "政策导向行业融资"]},
+        ],
+        "combo": [
+            {"name": "财政发力+货币配合", "desc": "财政端形成需求，货币端降低融资成本与对冲流动性波动"},
+            {"name": "逆周期+跨周期", "desc": "短期稳增长与中长期结构转型并行"},
+        ],
+    }
+
+
+def _scrape_links(url: str, source: str, max_items: int = 8) -> list[dict]:
+    try:
+        r = requests.get(url, timeout=8, headers={"User-Agent": "Mozilla/5.0"})
+        r.raise_for_status()
+        if not r.encoding or r.encoding.lower() == "iso-8859-1":
+            r.encoding = r.apparent_encoding or "utf-8"
+        html = r.text
+    except Exception:
+        return []
+
+    out = []
+    seen = set()
+    for m in re.finditer(r'<a[^>]+href=["\']([^"\']+)["\'][^>]*>(.*?)</a>', html, flags=re.I | re.S):
+        href = (m.group(1) or "").strip()
+        title = re.sub(r"<[^>]+>", "", m.group(2) or "")
+        title = re.sub(r"\s+", " ", title).strip()
+        if not href or len(title) < 6:
+            continue
+        if "�" in title:
+            continue
+        if any(x in title for x in ["登录", "注册", "上一页", "下一页", "更多", "首页"]):
+            continue
+        if href.startswith("//"):
+            href = "https:" + href
+        elif href.startswith("/"):
+            base = "/".join(url.split("/")[:3])
+            href = base + href
+        key = (title, href)
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append({"title": title, "url": href, "source": source})
+        if len(out) >= max_items:
+            break
+    return out
+
+
+def _policy_news() -> dict:
+    seeds = [
+        ("https://www.gov.cn/zhengce/zuixin.htm", "中国政府网·政策"),
+        ("http://www.pbc.gov.cn/goutongjiaoliu/113456/113469/index.html", "人民银行·货币政策"),
+        ("https://www.mof.gov.cn/zhengwuxinxi/caizhengxinwen/", "财政部·财政新闻"),
+    ]
+    items = []
+    for u, s in seeds:
+        items.extend(_scrape_links(u, s, max_items=8))
+    # 去重并截断
+    uniq = []
+    seen = set()
+    for it in items:
+        k = (it["title"], it["url"])
+        if k in seen:
+            continue
+        seen.add(k)
+        uniq.append(it)
+    uniq = uniq[:20]
+    return {"updated_at": _cn_now().strftime("%Y-%m-%d %H:%M:%S"), "items": uniq}
+
+
+@app.route("/policy-dashboard")
+def policy_dashboard():
+    return render_template("policy_dashboard.html")
+
+
+@app.route("/api/policy/catalog")
+def api_policy_catalog():
+    return jsonify(_policy_catalog())
+
+
+@app.route("/api/policy/news")
+def api_policy_news():
+    return jsonify(_policy_news())
 
 
 @app.route("/news")

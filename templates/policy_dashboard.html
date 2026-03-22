@@ -1,0 +1,81 @@
+<!doctype html>
+<html lang="zh-CN"><head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>中国财政政策与货币政策全景</title>
+  <link rel="stylesheet" href="/static/style.css" />
+  <link rel="stylesheet" href="/static/dark.css" />
+  <style>
+    .tabs{display:flex;gap:8px;flex-wrap:wrap;margin:10px 0}
+    .tab{padding:8px 12px;border:1px solid #334155;border-radius:10px;cursor:pointer;background:#0f172a;color:#e2e8f0}
+    .tab.active{background:#1d4ed8;border-color:#1d4ed8}
+    .grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:12px}
+    .item{border:1px solid #334155;border-radius:12px;padding:12px;background:#0b1220}
+    .muted{color:#94a3b8}
+    .news{display:grid;gap:8px}
+    .news a{color:#93c5fd;text-decoration:none}
+    .news a:hover{text-decoration:underline}
+  </style>
+</head>
+<body>
+<main class="container">
+  <h1>🏛️ 中国财政政策 & 货币政策全景</h1>
+  <p class="sub">覆盖主要政策工具、传导逻辑与观察指标，并提供政策新闻窗口。</p>
+
+  <section class="card">
+    <div class="tabs">
+      <button class="tab active" data-key="fiscal" onclick="switchTab('fiscal', this)">财政政策工具</button>
+      <button class="tab" data-key="monetary" onclick="switchTab('monetary', this)">货币政策工具</button>
+      <button class="tab" data-key="combo" onclick="switchTab('combo', this)">政策组合框架</button>
+    </div>
+    <div id="policyGrid" class="grid"></div>
+  </section>
+
+  <section class="card">
+    <h2>📰 政策新闻窗口（官方口径聚合）</h2>
+    <p class="muted" id="newsTs"></p>
+    <div id="newsList" class="news"></div>
+  </section>
+</main>
+<script>
+let catalog = null;
+
+function renderList(key){
+  const rows = (catalog && catalog[key]) || [];
+  const box = document.getElementById('policyGrid');
+  if(!rows.length){ box.innerHTML = '<p class="muted">暂无数据</p>'; return; }
+  box.innerHTML = rows.map(r => `
+    <div class="item">
+      <h3>${r.name || ''}</h3>
+      <p>${r.desc || ''}</p>
+      ${(r.signals||[]).length ? `<p class="muted">观察指标：${r.signals.join('｜')}</p>` : ''}
+    </div>
+  `).join('');
+}
+
+function switchTab(key, el){
+  document.querySelectorAll('.tab').forEach(t=>t.classList.remove('active'));
+  el.classList.add('active');
+  renderList(key);
+}
+
+async function loadCatalog(){
+  const res = await fetch('/api/policy/catalog');
+  catalog = await res.json();
+  renderList('fiscal');
+}
+
+async function loadNews(){
+  const res = await fetch('/api/policy/news');
+  const data = await res.json();
+  document.getElementById('newsTs').textContent = `更新时间：${data.updated_at || '-'}`;
+  const items = data.items || [];
+  document.getElementById('newsList').innerHTML = items.length
+    ? items.map(x=>`<div>• <a href="${x.url}" target="_blank" rel="noopener">${x.title}</a> <span class="muted">[${x.source||''}]</span></div>`).join('')
+    : '<p class="muted">暂无可用政策新闻</p>';
+}
+
+loadCatalog();
+loadNews();
+</script>
+</body></html>
