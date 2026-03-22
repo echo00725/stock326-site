@@ -3,145 +3,179 @@
 <head>
   <meta charset="UTF-8"/>
   <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
-  <title>全球新闻雷达（交互地球）</title>
+  <title>全球新闻雷达 Pro</title>
   <link rel="stylesheet" href="/static/style.css"/>
   <link rel="stylesheet" href="/static/dark.css"/>
   <script src="https://cdn.jsdelivr.net/npm/echarts@5/dist/echarts.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/echarts-gl@2/dist/echarts-gl.min.js"></script>
-  <script src="https://cdn.jsdelivr.net/npm/echarts@5/map/js/world.js"></script>
   <style>
     .top{display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap}
-    .layout{display:grid;grid-template-columns:45% 55%;gap:14px;margin-top:12px}
+    .layout{display:grid;grid-template-columns:46% 54%;gap:14px;margin-top:12px}
     .panel{border:1px solid #334155;border-radius:14px;background:#0b1220;padding:12px}
-    #globe{height:680px}
-    .chips{display:flex;gap:8px;flex-wrap:wrap;margin-top:8px}
-    .chip{padding:6px 10px;border:1px solid #334155;border-radius:999px;background:#111827;color:#e2e8f0;cursor:pointer;font-size:12px}
-    .chip.active{background:#1d4ed8;border-color:#1d4ed8}
+    #globe{height:720px;border-radius:12px;overflow:hidden;background:radial-gradient(ellipse at center,#0b1b2f 0%,#020617 75%)}
+    .toolbar{display:flex;gap:8px;flex-wrap:wrap;margin:8px 0}
+    .chip,.sort{padding:6px 10px;border:1px solid #334155;border-radius:999px;background:#111827;color:#e2e8f0;cursor:pointer;font-size:12px}
+    .chip.active,.sort.active{background:#1d4ed8;border-color:#1d4ed8}
+    .country-select{width:100%;padding:8px;border-radius:10px;background:#0f172a;color:#e2e8f0;border:1px solid #334155;margin-top:6px}
     .news-item{padding:10px 0;border-bottom:1px dashed #334155}
     .news-item:last-child{border-bottom:none}
     .news-item a{color:#93c5fd;text-decoration:none;font-weight:600}
     .meta{color:#94a3b8;font-size:12px;margin-top:4px}
-    .hint{color:#cbd5e1;font-size:13px;margin-top:4px}
-    @media (max-width: 1000px){
-      .layout{grid-template-columns:1fr}
-      #globe{height:420px}
-    }
+    .badge{display:inline-block;padding:2px 8px;border:1px solid #334155;border-radius:999px;margin-right:6px;font-size:12px}
+    @media (max-width: 1000px){.layout{grid-template-columns:1fr}#globe{height:420px}}
   </style>
 </head>
 <body>
 <main class="container">
   <div class="top">
-    <h1>🌍 全球新闻雷达（交互地球）</h1>
+    <h1>🌍 全球新闻雷达 Pro</h1>
     <a class="btn secondary" href="/">← 返回功能目录</a>
   </div>
-  <p class="sub">左侧点击地区，右侧实时展示该地区媒体报道（经济/政策/市场）。</p>
+  <p class="sub">覆盖主要国家，支持地球交互、热度脉冲、按时间/热度/影响排序。</p>
 
   <div class="layout">
     <section class="panel">
       <div id="globe"></div>
-      <div class="chips" id="quickRegions">
-        <button class="chip active" data-region="china">中国</button>
-        <button class="chip" data-region="us">美国</button>
-        <button class="chip" data-region="europe">欧洲</button>
-        <button class="chip" data-region="japan">日本</button>
-        <button class="chip" data-region="middleeast">中东</button>
-      </div>
+      <select id="countrySelect" class="country-select"></select>
+      <div class="toolbar" id="quickRegions"></div>
     </section>
 
     <section class="panel">
       <h2 id="regionTitle">地区：-</h2>
       <div class="meta" id="updatedAt">更新时间：-</div>
-      <div id="newsList" style="margin-top:8px"></div>
+      <div class="toolbar" id="sortBar">
+        <button class="sort active" data-sort="heat">按热度</button>
+        <button class="sort" data-sort="time">按时间</button>
+        <button class="sort" data-sort="impact">按影响</button>
+      </div>
+      <div id="newsList"></div>
     </section>
   </div>
 </main>
 
 <script>
-const regionMap = {
-  'China': 'china', '中国': 'china',
-  'United States of America': 'us', 'United States': 'us', '美国': 'us',
-  'Japan': 'japan', '日本': 'japan',
-  'France': 'europe', 'Germany': 'europe', 'United Kingdom': 'europe', 'Italy': 'europe', 'Spain': 'europe', '欧洲': 'europe',
-  'Saudi Arabia': 'middleeast', 'United Arab Emirates': 'middleeast', 'Israel': 'middleeast', 'Iran': 'middleeast', '中东': 'middleeast'
+const countries = {
+  china:{name:'中国',coord:[116.4,39.9]}, us:{name:'美国',coord:[-77.0,38.9]}, europe:{name:'欧洲',coord:[2.3,48.9]},
+  japan:{name:'日本',coord:[139.7,35.6]}, middleeast:{name:'中东',coord:[46.7,24.7]}, india:{name:'印度',coord:[77.2,28.6]},
+  russia:{name:'俄罗斯',coord:[37.6,55.7]}, brazil:{name:'巴西',coord:[-47.9,-15.8]}, canada:{name:'加拿大',coord:[-75.7,45.4]},
+  australia:{name:'澳大利亚',coord:[149.1,-35.3]}, korea:{name:'韩国',coord:[126.9,37.6]}, singapore:{name:'新加坡',coord:[103.8,1.35]},
+  uk:{name:'英国',coord:[-0.1,51.5]}, germany:{name:'德国',coord:[13.4,52.5]}, france:{name:'法国',coord:[2.35,48.86]},
+  italy:{name:'意大利',coord:[12.49,41.89]}, spain:{name:'西班牙',coord:[-3.7,40.4]}, mexico:{name:'墨西哥',coord:[-99.1,19.4]},
+  indonesia:{name:'印尼',coord:[106.8,-6.2]}, turkiye:{name:'土耳其',coord:[32.85,39.93]}, saudi:{name:'沙特',coord:[46.7,24.7]},
+  uae:{name:'阿联酋',coord:[54.37,24.45]}
 };
 
-let currentRegion = 'china';
-const globe = echarts.init(document.getElementById('globe'));
+const aliasToKey = {
+  'China':'china','United States':'us','United States of America':'us','Japan':'japan','India':'india','Russia':'russia',
+  'Brazil':'brazil','Canada':'canada','Australia':'australia','South Korea':'korea','Singapore':'singapore','United Kingdom':'uk',
+  'Germany':'germany','France':'france','Italy':'italy','Spain':'spain','Mexico':'mexico','Indonesia':'indonesia',
+  'Turkey':'turkiye','Saudi Arabia':'saudi','United Arab Emirates':'uae','Iran':'middleeast','Israel':'middleeast','Iraq':'middleeast',
+  'Syria':'middleeast','Qatar':'middleeast','Kuwait':'middleeast','Oman':'middleeast','Jordan':'middleeast','Egypt':'middleeast'
+};
 
-function drawGlobe(){
-  globe.setOption({
-    backgroundColor: 'transparent',
-    globe: {
-      baseTexture: 'https://fastly.jsdelivr.net/gh/apache/echarts-website@asf-site/examples/data-gl/asset/world.topo.bathy.200401.jpg',
-      heightTexture: 'https://fastly.jsdelivr.net/gh/apache/echarts-website@asf-site/examples/data-gl/asset/bathymetry_bw_composite_4k.jpg',
-      shading: 'lambert',
-      light: { main: { intensity: 1.2 }, ambient: { intensity: 0.35 } },
-      viewControl: { autoRotate: true, autoRotateSpeed: 8, targetCoord: [105, 35], distance: 170 },
-      layers: []
+let currentRegion='china';
+let currentSort='heat';
+const chart=echarts.init(document.getElementById('globe'));
+
+function glowSeries(region, count){
+  const c = countries[region]?.coord || [116.4,39.9];
+  const n = Math.max(6, Math.min(18, count));
+  const pts=[];
+  for(let i=0;i<n;i++){
+    pts.push({value:[c[0]+(Math.random()-0.5)*8, c[1]+(Math.random()-0.5)*6, 2]});
+  }
+  return [{
+    type:'scatter3D', coordinateSystem:'globe', symbolSize: 8,
+    itemStyle:{color:'#60a5fa',opacity:0.9}, blendMode:'lighter', data:pts
+  }];
+}
+
+function renderGlobe(region='china',count=10){
+  const center = countries[region]?.coord || [116.4,39.9];
+  chart.setOption({
+    backgroundColor:'transparent',
+    globe:{
+      baseTexture:'https://fastly.jsdelivr.net/gh/apache/echarts-website@asf-site/examples/data-gl/asset/world.topo.bathy.200401.jpg',
+      heightTexture:'https://fastly.jsdelivr.net/gh/apache/echarts-website@asf-site/examples/data-gl/asset/bathymetry_bw_composite_4k.jpg',
+      shading:'realistic',
+      realisticMaterial:{roughness:0.8,metalness:0},
+      postEffect:{enable:true,bloom:{enable:true,bloomIntensity:0.15}},
+      light:{main:{intensity:1.2,shadow:true},ambient:{intensity:0.35}},
+      viewControl:{autoRotate:true,autoRotateSpeed:6,targetCoord:center,distance:165},
+      atmosphere:{show:true,outerGlow:{enable:true,color:'#3b82f6',intensity:0.18}}
     },
-    series: [{
-      type: 'scatter3D',
-      coordinateSystem: 'globe',
-      symbolSize: 8,
-      itemStyle: { color: '#60a5fa' },
-      data: [
-        { name:'中国', value:[116.4,39.9,2], region:'china' },
-        { name:'美国', value:[-77.0,38.9,2], region:'us' },
-        { name:'欧洲', value:[2.3,48.9,2], region:'europe' },
-        { name:'日本', value:[139.7,35.6,2], region:'japan' },
-        { name:'中东', value:[46.7,24.7,2], region:'middleeast' }
-      ],
-      label: { show:true, formatter: p=>p.data.name, color:'#e2e8f0', fontSize:11 }
+    series:[...glowSeries(region,count),{
+      type:'scatter3D', coordinateSystem:'globe', symbolSize:11,
+      itemStyle:{color:'#f59e0b'},
+      data:Object.entries(countries).map(([k,v])=>({name:v.name,value:[v.coord[0],v.coord[1],2],region:k})),
+      label:{show:false}
     }]
-  });
+  },true);
 
-  globe.on('click', (p) => {
-    if (p?.data?.region) {
-      selectRegion(p.data.region);
-      return;
-    }
-    const r = regionMap[p.name];
-    if (r) selectRegion(r);
+  chart.off('click');
+  chart.on('click',(p)=>{
+    if(p?.data?.region) selectRegion(p.data.region);
+    else if(aliasToKey[p.name]) selectRegion(aliasToKey[p.name]);
   });
 }
 
-function setChip(region){
-  document.querySelectorAll('.chip').forEach(x=>x.classList.remove('active'));
-  const target = document.querySelector(`.chip[data-region="${region}"]`);
-  if (target) target.classList.add('active');
+function mountSelectors(){
+  const select=document.getElementById('countrySelect');
+  select.innerHTML=Object.entries(countries).map(([k,v])=>`<option value="${k}">${v.name}</option>`).join('');
+  select.value=currentRegion;
+  select.onchange=()=>selectRegion(select.value);
+
+  const quick=document.getElementById('quickRegions');
+  const hot=['china','us','europe','japan','india','middleeast','uk','germany'];
+  quick.innerHTML=hot.map(k=>`<button class="chip ${k===currentRegion?'active':''}" data-r="${k}">${countries[k].name}</button>`).join('');
+  quick.onclick=(e)=>{
+    const b=e.target.closest('.chip'); if(!b) return; selectRegion(b.dataset.r);
+  };
+}
+
+function setSort(sort){
+  currentSort=sort;
+  document.querySelectorAll('.sort').forEach(x=>x.classList.toggle('active',x.dataset.sort===sort));
+  loadRegionNews(currentRegion);
+}
+
+function renderNews(data){
+  document.getElementById('regionTitle').textContent=`地区：${data.region_name || currentRegion}`;
+  document.getElementById('updatedAt').textContent=`更新时间：${data.updated_at || '-'}`;
+  const items=data.items||[];
+  document.getElementById('newsList').innerHTML=items.length?items.map(i=>`
+    <div class="news-item">
+      <a href="${i.link||'#'}" target="_blank" rel="noopener">${i.title_zh||i.title||'（无标题）'}</a>
+      <div class="meta">
+        <span class="badge">热度 ${i.heat||0}</span>
+        <span class="badge">影响 ${i.impact||'中性'}</span>
+        <span class="badge">时间 ${(i.published||'').replace('T',' ').slice(0,16) || '-'}</span>
+      </div>
+      <div class="meta">${i.abstract||''}</div>
+    </div>
+  `).join(''):'<div class="meta">暂无该地区新闻。</div>';
+  renderGlobe(currentRegion, items.length);
 }
 
 async function loadRegionNews(region){
-  const res = await fetch(`/api/news/geo?region=${encodeURIComponent(region)}&limit=24`);
-  const data = await res.json();
-  document.getElementById('regionTitle').textContent = `地区：${data.region_name || region}`;
-  document.getElementById('updatedAt').textContent = `更新时间：${data.updated_at || '-'}`;
-  const items = data.items || [];
-  document.getElementById('newsList').innerHTML = items.length
-    ? items.map(i => `
-      <div class="news-item">
-        <a href="${i.link || '#'}" target="_blank" rel="noopener">${i.title_zh || i.title || '（无标题）'}</a>
-        <div class="hint">${i.abstract || ''}</div>
-        <div class="meta">影响：${i.impact || '中性'} ${i.events?.length ? '｜事件：'+i.events.join('、') : ''} ${i.sectors?.length ? '｜板块：'+i.sectors.join('、') : ''}</div>
-      </div>
-    `).join('')
-    : '<div class="meta">该地区暂无可用新闻，请稍后重试。</div>';
+  const res=await fetch(`/api/news/geo?region=${encodeURIComponent(region)}&limit=28&sort=${encodeURIComponent(currentSort)}`);
+  const data=await res.json();
+  renderNews(data);
 }
 
-async function selectRegion(region){
-  currentRegion = region;
-  setChip(region);
-  await loadRegionNews(region);
+function selectRegion(region){
+  currentRegion=region;
+  mountSelectors();
+  loadRegionNews(region);
 }
 
-document.getElementById('quickRegions').addEventListener('click', (e) => {
-  const btn = e.target.closest('.chip');
-  if (!btn) return;
-  selectRegion(btn.dataset.region);
-});
+document.getElementById('sortBar').onclick=(e)=>{
+  const b=e.target.closest('.sort'); if(!b) return; setSort(b.dataset.sort);
+};
 
-drawGlobe();
-selectRegion('china');
+mountSelectors();
+renderGlobe(currentRegion,10);
+loadRegionNews(currentRegion);
 </script>
 </body>
 </html>

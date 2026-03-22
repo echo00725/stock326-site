@@ -1828,9 +1828,10 @@ def api_news_geo():
     from news_fetcher import fetch_region_news
 
     region = request.args.get("region", "china")
+    sort_by = request.args.get("sort", "heat")
     limit = int(request.args.get("limit", "20") or 20)
-    limit = max(5, min(limit, 40))
-    return jsonify(fetch_region_news(region=region, limit=limit))
+    limit = max(5, min(limit, 60))
+    return jsonify(fetch_region_news(region=region, limit=limit, sort_by=sort_by))
 
 
 @app.route("/volume-profile")

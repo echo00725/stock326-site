@@ -4,6 +4,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Dict, List
 import time
 import re
+from urllib.parse import quote_plus
 import feedparser
 
 try:
@@ -198,6 +199,14 @@ def _recent(entries, hours: int = 24, translate_titles: bool = False, max_transl
         events = _detect_events(full_text)
         hint = _trading_hint(impact, sectors, events)
 
+        now_utc = datetime.now(timezone.utc)
+        recency = 0
+        if dt:
+            hours = max((now_utc - dt).total_seconds() / 3600, 0)
+            recency = max(0, 60 - int(hours * 2))  # 越新分越高
+        impact_score = {"利多": 25, "中性": 15, "利空": 10}.get(impact, 12)
+        heat_score = int(recency + impact_score + len(events) * 8 + len(sectors) * 4)
+
         out.append(
             {
                 "title": title,
@@ -210,68 +219,83 @@ def _recent(entries, hours: int = 24, translate_titles: bool = False, max_transl
                 "trading_hint": hint,
                 "link": getattr(e, "link", ""),
                 "published": dt.isoformat() if dt else "",
+                "published_ts": int(dt.timestamp()) if dt else 0,
+                "heat": heat_score,
             }
         )
     return out
 
 
-REGION_FEEDS = {
-    "china": {
-        "name": "中国",
-        "feeds": [
-            "https://news.google.com/rss/search?q=China+economy+policy&hl=zh-CN&gl=CN&ceid=CN:zh-Hans",
-            "https://www.chinanews.com.cn/rss/world.xml",
-        ],
-    },
-    "us": {
-        "name": "美国",
-        "feeds": [
-            "https://news.google.com/rss/search?q=US+economy+policy+markets&hl=en-US&gl=US&ceid=US:en",
-            "https://feeds.reuters.com/reuters/usBusinessNews",
-        ],
-    },
-    "europe": {
-        "name": "欧洲",
-        "feeds": [
-            "https://news.google.com/rss/search?q=Europe+economy+ECB+policy&hl=en-GB&gl=GB&ceid=GB:en",
-            "https://feeds.bbci.co.uk/news/world/europe/rss.xml",
-        ],
-    },
-    "japan": {
-        "name": "日本",
-        "feeds": [
-            "https://news.google.com/rss/search?q=Japan+economy+BoJ+policy&hl=ja&gl=JP&ceid=JP:ja",
-        ],
-    },
-    "middleeast": {
-        "name": "中东",
-        "feeds": [
-            "https://news.google.com/rss/search?q=Middle+East+oil+geopolitics&hl=en&gl=AE&ceid=AE:en",
-        ],
-    },
+REGION_PRESETS = {
+    "china": {"name": "中国", "query": "China economy policy markets", "gl": "CN", "hl": "zh-CN", "ceid": "CN:zh-Hans"},
+    "us": {"name": "美国", "query": "United States economy policy markets", "gl": "US", "hl": "en-US", "ceid": "US:en"},
+    "europe": {"name": "欧洲", "query": "Europe economy policy ECB markets", "gl": "GB", "hl": "en-GB", "ceid": "GB:en"},
+    "japan": {"name": "日本", "query": "Japan economy BoJ policy markets", "gl": "JP", "hl": "ja", "ceid": "JP:ja"},
+    "middleeast": {"name": "中东", "query": "Middle East geopolitics oil markets", "gl": "AE", "hl": "en", "ceid": "AE:en"},
+    "india": {"name": "印度", "query": "India economy RBI policy markets", "gl": "IN", "hl": "en-IN", "ceid": "IN:en"},
+    "russia": {"name": "俄罗斯", "query": "Russia economy central bank policy", "gl": "RU", "hl": "en", "ceid": "RU:en"},
+    "brazil": {"name": "巴西", "query": "Brazil economy central bank policy", "gl": "BR", "hl": "pt-BR", "ceid": "BR:pt-419"},
+    "canada": {"name": "加拿大", "query": "Canada economy BoC policy markets", "gl": "CA", "hl": "en-CA", "ceid": "CA:en"},
+    "australia": {"name": "澳大利亚", "query": "Australia economy RBA policy markets", "gl": "AU", "hl": "en-AU", "ceid": "AU:en"},
+    "korea": {"name": "韩国", "query": "South Korea economy central bank policy", "gl": "KR", "hl": "ko", "ceid": "KR:ko"},
+    "singapore": {"name": "新加坡", "query": "Singapore MAS policy economy markets", "gl": "SG", "hl": "en-SG", "ceid": "SG:en"},
+    "uk": {"name": "英国", "query": "United Kingdom economy BoE policy markets", "gl": "GB", "hl": "en-GB", "ceid": "GB:en"},
+    "germany": {"name": "德国", "query": "Germany economy markets", "gl": "DE", "hl": "de", "ceid": "DE:de"},
+    "france": {"name": "法国", "query": "France economy markets", "gl": "FR", "hl": "fr", "ceid": "FR:fr"},
+    "italy": {"name": "意大利", "query": "Italy economy markets", "gl": "IT", "hl": "it", "ceid": "IT:it"},
+    "spain": {"name": "西班牙", "query": "Spain economy markets", "gl": "ES", "hl": "es", "ceid": "ES:es"},
+    "mexico": {"name": "墨西哥", "query": "Mexico economy central bank policy", "gl": "MX", "hl": "es", "ceid": "MX:es-419"},
+    "indonesia": {"name": "印尼", "query": "Indonesia economy central bank policy", "gl": "ID", "hl": "id", "ceid": "ID:id"},
+    "turkiye": {"name": "土耳其", "query": "Turkey economy central bank policy", "gl": "TR", "hl": "tr", "ceid": "TR:tr"},
+    "saudi": {"name": "沙特", "query": "Saudi Arabia economy oil policy", "gl": "SA", "hl": "ar", "ceid": "SA:ar"},
+    "uae": {"name": "阿联酋", "query": "UAE economy policy markets", "gl": "AE", "hl": "en", "ceid": "AE:en"},
 }
 
 
-def fetch_region_news(region: str = "china", limit: int = 20) -> Dict:
-    key = (region or "china").lower()
-    cfg = REGION_FEEDS.get(key) or REGION_FEEDS["china"]
+def _google_rss(query: str, hl: str, gl: str, ceid: str) -> str:
+    return f"https://news.google.com/rss/search?q={quote_plus(query)}&hl={hl}&gl={gl}&ceid={ceid}"
+
+
+def _region_cfg(region: str) -> dict:
+    key = (region or "china").lower().strip()
+    if key in REGION_PRESETS:
+        cfg = dict(REGION_PRESETS[key])
+        cfg["key"] = key
+        return cfg
+    # 任意国家名兜底：用 Google RSS 搜索生成
+    pretty = region.strip() or "Global"
+    return {
+        "key": key or "global",
+        "name": pretty,
+        "query": f"{pretty} economy policy markets",
+        "hl": "en-US",
+        "gl": "US",
+        "ceid": "US:en",
+    }
+
+
+def fetch_region_news(region: str = "china", limit: int = 20, sort_by: str = "heat") -> Dict:
+    cfg = _region_cfg(region)
+    key = cfg["key"]
 
     now_ts = time.time()
-    ck = f"{key}:{limit}"
+    ck = f"{key}:{limit}:{sort_by}"
     cache = _REGION_NEWS_CACHE.get(ck)
     if cache and (now_ts - float(cache.get("ts", 0.0)) < 180):
         return cache.get("data")  # type: ignore[return-value]
 
+    feeds = [
+        _google_rss(cfg["query"], cfg["hl"], cfg["gl"], cfg["ceid"]),
+        "https://feeds.reuters.com/reuters/worldNews",
+        "https://feeds.bbci.co.uk/news/world/rss.xml",
+    ]
+
     rows = []
     seen = set()
-    feeds = list(cfg["feeds"])
-    if key != "china":
-        feeds += ["https://feeds.reuters.com/reuters/worldNews", "https://feeds.bbci.co.uk/news/world/rss.xml"]
-
     for feed in feeds:
         try:
             d = feedparser.parse(feed)
-            items = _recent(d.entries, translate_titles=True, max_translate=6)
+            items = _recent(d.entries, translate_titles=True, max_translate=8)
         except Exception:
             items = []
         for it in items:
@@ -280,11 +304,18 @@ def fetch_region_news(region: str = "china", limit: int = 20) -> Dict:
                 continue
             seen.add(k)
             rows.append(it)
-            if len(rows) >= limit:
+            if len(rows) >= limit * 2:
                 break
-        if len(rows) >= limit:
-            break
 
+    if sort_by == "time":
+        rows = sorted(rows, key=lambda x: x.get("published_ts", 0), reverse=True)
+    elif sort_by == "impact":
+        rank = {"利多": 3, "中性": 2, "利空": 1}
+        rows = sorted(rows, key=lambda x: (rank.get(x.get("impact", "中性"), 2), x.get("heat", 0)), reverse=True)
+    else:
+        rows = sorted(rows, key=lambda x: (x.get("heat", 0), x.get("published_ts", 0)), reverse=True)
+
+    rows = rows[:limit]
     data = {
         "updated_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
         "region": key,
