@@ -1319,7 +1319,7 @@ def _policy_live_metrics() -> dict:
     except Exception:
         out["mlf"] = {}
     try:
-        out["omo_hist"] = _fetch_omo_7d_history(limit=5)
+        out["omo_hist"] = _fetch_omo_7d_history(limit=14)
     except Exception:
         out["omo_hist"] = []
     try:
@@ -1690,7 +1690,7 @@ def _policy_catalog() -> dict:
             if it.get("name") == "OMO逆回购":
                 it["table"] = [
                     {"metric": h.get("date") or f"第{i+1}条", "latest": f"利率 {h.get('rate') or '暂无'} / 规模 {h.get('amount') or '暂无'}", "freq": "日", "source": h.get("url") or "人民银行"}
-                    for i, h in enumerate(omo_hist[:5])
+                    for i, h in enumerate(omo_hist[:14])
                 ]
 
     if lpr_hist:
