@@ -18,7 +18,7 @@
       <li><strong>风险提示：</strong>{{ data.strategy.risk_note }}</li>
     </ul>
     <div style="display:flex;gap:8px;flex-wrap:wrap">
-      <button class="btn" onclick="runNow()">立即刷新（真实计算）</button>
+      <button id="refreshBtn" class="btn" onclick="runNow()">立即刷新（真实计算）</button>
       <a class="btn secondary" href="/">返回目录</a>
     </div>
   </section>
@@ -57,22 +57,30 @@ function renderPicks(data){
   if(data.updated_at) document.getElementById('updatedAt').innerText = `更新时间：${data.updated_at}`;
 }
 async function runNow(){
-  const btn=document.querySelector('.btn'); const old=btn.innerText; btn.disabled=true; btn.innerText='刷新中...';
+  const btn=document.getElementById('refreshBtn');
+  const old=btn.innerText;
+  btn.disabled=true;
+  btn.innerText='刷新中...';
+
   try{
-    const res=await fetch('/api/run-now'); const data=await res.json();
+    const res=await fetch('/api/run-now');
+    const data=await res.json();
     if(!res.ok||data.ok===false){
       const msg=data.message||`刷新失败（HTTP ${res.status}）`;
       document.getElementById('calcStatus').innerText=`计算状态：失败（${msg}）`;
       document.getElementById('picksSection').innerHTML=`<h2>今日短线参考排名</h2><p style='color:#f87171'>本次真实计算失败，结果未更新。原因：${msg}</p>`;
       return;
     }
-    document.getElementById('calcStatus').innerText='计算状态：真实计算成功';
+    document.getElementById('calcStatus').innerText = data.degraded ? `计算状态：降级成功（${data.message||'已回退最近结果'}）` : '计算状态：真实计算成功';
     renderPicks(data.data);
   }catch(e){
-    const msg='真实数据源连接异常，请稍后重试';
+    const msg = '真实数据源连接异常，请稍后重试';
     document.getElementById('calcStatus').innerText=`计算状态：失败（${msg}）`;
     document.getElementById('picksSection').innerHTML=`<h2>今日短线参考排名</h2><p style='color:#f87171'>本次真实计算失败，结果未更新。原因：${msg}</p>`;
-  }finally{btn.disabled=false;btn.innerText=old;}
+  }finally{
+    btn.disabled=false;
+    btn.innerText=old;
+  }
 }
 </script>
 </body></html>

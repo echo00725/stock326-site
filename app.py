@@ -103,6 +103,20 @@ def fallback_rankings() -> dict:
     }
 
 
+def _fill_industry_flow_if_missing(data: dict | None) -> dict:
+    data = dict(data or {})
+    if data.get("industry_flow"):
+        return data
+
+    # 优先在线补齐；失败时尽量回退上次缓存里的行业数据
+    try:
+        data["industry_flow"] = _fetch_industry_flow_top10()
+    except Exception:
+        cached = load_json(DATA_FILE, {})
+        data["industry_flow"] = cached.get("industry_flow") or []
+    return data
+
+
 # ====== 短线排名 ======
 def _fetch_universe_realtime(limit_pages: int = 12) -> list[dict]:
     # 东财全市场快照：默认12页（12*200=2400）已足够用于市场脉搏与候选池
@@ -526,7 +540,7 @@ def _real_rankings() -> dict:
     try:
         industry_flow = _fetch_industry_flow_top10()
     except Exception:
-        industry_flow = []
+        industry_flow = load_json(DATA_FILE, {}).get("industry_flow") or []
 
     return {
         "updated_at": now,
@@ -1064,6 +1078,7 @@ def shortline_dashboard_page():
             "picks": [],
         },
     )
+    data = _fill_industry_flow_if_missing(data)
     return render_template("shortline_dashboard.html", data=data)
 
 
@@ -1096,18 +1111,16 @@ def validation_page():
 @app.route("/api/recommendations")
 def api_recommendations():
     global LAST_RECOMMENDATIONS
-    return jsonify(
-        LAST_RECOMMENDATIONS
-        or load_json(
-            DATA_FILE,
-            {
-                "updated_at": "尚未生成",
-                "strategy": {"name": "A股全市场短线交易参考排名", "version": "real-only", "principle": "仅真实计算结果，不使用假数据", "risk_note": "仅供研究"},
-                "industry_flow": [],
-                "picks": [],
-            },
-        )
+    data = LAST_RECOMMENDATIONS or load_json(
+        DATA_FILE,
+        {
+            "updated_at": "尚未生成",
+            "strategy": {"name": "A股全市场短线交易参考排名", "version": "real-only", "principle": "仅真实计算结果，不使用假数据", "risk_note": "仅供研究"},
+            "industry_flow": [],
+            "picks": [],
+        },
     )
+    return jsonify(_fill_industry_flow_if_missing(data))
 
 
 @app.route("/api/oversold-rebound")
@@ -1519,7 +1532,7 @@ def api_run_now():
         return jsonify({"ok": True, "message": "已刷新短线排名（真实计算）", "data": out})
     except Exception as e:
         # 关键修复：真实源失败时回退缓存，不返回500
-        cached = LAST_RECOMMENDATIONS or load_json(DATA_FILE, fallback_rankings())
+        cached = _fill_industry_flow_if_missing(LAST_RECOMMENDATIONS or load_json(DATA_FILE, fallback_rankings()))
         return jsonify({
             "ok": True,
             "degraded": True,
