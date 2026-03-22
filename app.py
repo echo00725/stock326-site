@@ -31,6 +31,7 @@ UNIVERSE_CACHE = {"ts": 0.0, "rows": []}
 UNIVERSE_CACHE_FILE = Path("/tmp/stock326_universe_cache.json")
 FLOW_DIVERGENCE_CACHE_FILE = Path("/tmp/stock326_flow_divergence_cache.json")
 MAIN_INFLOW_CACHE = {}
+POLICY_METRICS_CACHE = {"ts": 0.0, "data": {}}
 
 
 # ====== 通用 ======
@@ -1197,7 +1198,105 @@ def api_validation():
     return jsonify(load_json(VALIDATION_FILE, {}))
 
 
+def _normalize_url(base: str, href: str) -> str:
+    if href.startswith("http"):
+        return href
+    if href.startswith("/"):
+        return "https://www.pbc.gov.cn" + href
+    return base.rsplit("/", 1)[0] + "/" + href
+
+
+def _extract_text(html: str) -> str:
+    t = re.sub(r"<script[\s\S]*?</script>", " ", html, flags=re.I)
+    t = re.sub(r"<style[\s\S]*?</style>", " ", t, flags=re.I)
+    t = re.sub(r"<[^>]+>", " ", t)
+    t = re.sub(r"\s+", " ", t).strip()
+    return t
+
+
+def _fetch_latest_omo_7d() -> dict:
+    idx = "https://www.pbc.gov.cn/zhengcehuobisi/125207/125213/125431/125475/index.html"
+    r = requests.get(idx, timeout=10, headers={"User-Agent": "Mozilla/5.0"})
+    r.encoding = "utf-8"
+    links = re.findall(r'<a[^>]+href="([^"]+)"[^>]*>(.*?)</a>', r.text, flags=re.I | re.S)
+    target_url = ""
+    for href, inner in links:
+        title = re.sub(r"<[^>]+>", "", inner)
+        title = re.sub(r"\s+", " ", title).strip()
+        if "公开市场业务交易公告" in title:
+            target_url = _normalize_url(idx, href)
+            break
+    if not target_url:
+        raise RuntimeError("未找到公开市场业务交易公告")
+
+    d = requests.get(target_url, timeout=10, headers={"User-Agent": "Mozilla/5.0"})
+    d.encoding = "utf-8"
+    txt = _extract_text(d.text)
+
+    date = (re.findall(r"(\d{4}年\d{1,2}月\d{1,2}日)", txt) or [""])[0]
+    amount = (re.findall(r"(\d+\s*亿元)7天期逆回购", txt) or re.findall(r"(\d+\s*亿元)", txt) or [""])[0]
+    rate = (
+        re.findall(r"7\s*天\s*([0-9]\s*\.?\s*[0-9]+)\s*%", txt)
+        or re.findall(r"利率[为：:]?\s*([0-9]+\.?\d*)\s*%", txt)
+        or [""]
+    )[0]
+    rate = rate.replace(" ", "")
+
+    return {
+        "date": date,
+        "amount": amount.replace(" ", ""),
+        "rate": (rate + "%") if rate else "",
+        "url": target_url,
+    }
+
+
+def _fetch_latest_lpr() -> dict:
+    idx = "https://www.pbc.gov.cn/zhengcehuobisi/125207/125213/125440/3876551/index.html"
+    r = requests.get(idx, timeout=10, headers={"User-Agent": "Mozilla/5.0"})
+    r.encoding = "utf-8"
+    links = re.findall(r'<a[^>]+href="([^"]+)"[^>]*>(.*?)</a>', r.text, flags=re.I | re.S)
+    target_url = ""
+    for href, inner in links:
+        title = re.sub(r"<[^>]+>", "", inner)
+        title = re.sub(r"\s+", " ", title).strip()
+        if "受权公布贷款市场报价利率" in title and "公告" in title:
+            target_url = _normalize_url(idx, href)
+            break
+    if not target_url:
+        raise RuntimeError("未找到LPR公告")
+
+    d = requests.get(target_url, timeout=10, headers={"User-Agent": "Mozilla/5.0"})
+    d.encoding = "utf-8"
+    txt = _extract_text(d.text)
+
+    date = (re.findall(r"(\d{4}年\d{1,2}月\d{1,2}日)", txt) or [""])[0]
+    lpr1 = (re.findall(r"1年期LPR为\s*([0-9]+\.?\d*)\s*%", txt) or [""])[0]
+    lpr5 = (re.findall(r"5年期以上LPR为\s*([0-9]+\.?\d*)\s*%", txt) or [""])[0]
+    return {
+        "date": date,
+        "lpr1": (lpr1 + "%") if lpr1 else "",
+        "lpr5": (lpr5 + "%") if lpr5 else "",
+        "url": target_url,
+    }
+
+
+def _policy_live_metrics() -> dict:
+    out = {}
+    try:
+        out["omo_7d"] = _fetch_latest_omo_7d()
+    except Exception:
+        out["omo_7d"] = {}
+    try:
+        out["lpr"] = _fetch_latest_lpr()
+    except Exception:
+        out["lpr"] = {}
+    return out
+
+
 def _policy_catalog() -> dict:
+    live = _policy_live_metrics()
+    omo = live.get("omo_7d") or {}
+    lpr = live.get("lpr") or {}
     return {
         "updated_at": _cn_now().strftime("%Y-%m-%d %H:%M:%S"),
         "fiscal": [
@@ -1263,6 +1362,11 @@ def _policy_catalog() -> dict:
                 "signals": ["1年LPR", "5年LPR", "新发放贷款利率"],
                 "mechanism": "LPR变化直接影响新增和重定价贷款成本。",
                 "impact": "地产、消费信贷、资本开支相关行业更敏感。",
+                "table": [
+                    {"metric": "1年期LPR", "latest": lpr.get("lpr1") or "抓取失败", "freq": "月", "source": "人民银行/LPR公告"},
+                    {"metric": "5年期以上LPR", "latest": lpr.get("lpr5") or "抓取失败", "freq": "月", "source": "人民银行/LPR公告"},
+                    {"metric": "实施日期", "latest": lpr.get("date") or "抓取失败", "freq": "月", "source": lpr.get("url") or "人民银行"},
+                ],
             },
             {
                 "name": "OMO逆回购",
@@ -1270,6 +1374,11 @@ def _policy_catalog() -> dict:
                 "signals": ["净投放规模", "到期量", "货币市场利率"],
                 "mechanism": "公开市场操作对冲短期流动性缺口。",
                 "impact": "短端利率、同业资金面、交易拥挤度变化更快。",
+                "table": [
+                    {"metric": "7天逆回购利率", "latest": omo.get("rate") or "抓取失败", "freq": "日", "source": "人民银行公开市场公告"},
+                    {"metric": "7天逆回购操作量", "latest": omo.get("amount") or "抓取失败", "freq": "日", "source": "人民银行公开市场公告"},
+                    {"metric": "实施日期", "latest": omo.get("date") or "抓取失败", "freq": "日", "source": omo.get("url") or "人民银行"},
+                ],
             },
             {
                 "name": "再贷款再贴现",
