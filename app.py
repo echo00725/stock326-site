@@ -1350,13 +1350,45 @@ def _policy_latest_notices() -> dict:
                 return {"title": t, "url": it.get("url", ""), "source": it.get("source", ""), "date": b.get("date", ""), "fig": b.get("fig", "")}
         return {"title": "暂无匹配公告", "url": "", "source": "", "date": "", "fig": ""}
 
+    def fallback_by_source(source_kw: str):
+        for it in news:
+            src = it.get("source", "")
+            if source_kw in src:
+                b = parse_brief(it.get("url", ""))
+                return {"title": it.get("title", ""), "url": it.get("url", ""), "source": src, "date": b.get("date", ""), "fig": b.get("fig", "")}
+        return {"title": "暂无匹配公告", "url": "", "source": "", "date": "", "fig": ""}
+
+    rrr = pick("准备金")
+    if rrr.get("title") == "暂无匹配公告":
+        rrr = fallback_by_source("人民银行")
+
+    reloan = pick("再贷款")
+    if reloan.get("title") == "暂无匹配公告":
+        reloan = fallback_by_source("人民银行")
+
+    psl = pick("结构", "工具")
+    if psl.get("title") == "暂无匹配公告":
+        psl = fallback_by_source("人民银行")
+
+    fiscal = pick("财政")
+    if fiscal.get("title") == "暂无匹配公告":
+        fiscal = fallback_by_source("财政部")
+
+    bond = pick("国债")
+    if bond.get("title") == "暂无匹配公告":
+        bond = fallback_by_source("财政部")
+
+    tax = pick("税")
+    if tax.get("title") == "暂无匹配公告":
+        tax = fallback_by_source("财政部")
+
     return {
-        "rrr": pick("准备金") if news else {"title": "暂无匹配公告", "url": "", "source": "", "date": "", "fig": ""},
-        "reloan": pick("再贷款") if news else {"title": "暂无匹配公告", "url": "", "source": "", "date": "", "fig": ""},
-        "psl": pick("结构", "工具") if news else {"title": "暂无匹配公告", "url": "", "source": "", "date": "", "fig": ""},
-        "fiscal": pick("财政") if news else {"title": "暂无匹配公告", "url": "", "source": "", "date": "", "fig": ""},
-        "bond": pick("国债") if news else {"title": "暂无匹配公告", "url": "", "source": "", "date": "", "fig": ""},
-        "tax": pick("税") if news else {"title": "暂无匹配公告", "url": "", "source": "", "date": "", "fig": ""},
+        "rrr": rrr,
+        "reloan": reloan,
+        "psl": psl,
+        "fiscal": fiscal,
+        "bond": bond,
+        "tax": tax,
     }
 
 
@@ -1543,13 +1575,15 @@ def _scrape_links(url: str, source: str, max_items: int = 8) -> list[dict]:
             continue
         if "�" in title:
             continue
-        if any(x in title for x in ["登录", "注册", "上一页", "下一页", "更多", "首页"]):
+        if any(x in title for x in ["登录", "注册", "上一页", "下一页", "更多", "首页", "English Version"]):
             continue
         if href.startswith("//"):
             href = "https:" + href
         elif href.startswith("/"):
             base = "/".join(url.split("/")[:3])
             href = base + href
+        elif href.startswith("./"):
+            href = url.rsplit("/", 1)[0] + "/" + href[2:]
         key = (title, href)
         if key in seen:
             continue
