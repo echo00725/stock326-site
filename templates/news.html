@@ -84,8 +84,19 @@ function showMapError(msg){
 
 async function ensureWorldMap(){
   if (echarts.getMap && echarts.getMap('world')) return true;
+  // 优先本地静态文件，避免外网/CORS导致空白
   try{
-    const res = await fetch('https://fastly.jsdelivr.net/npm/echarts@5/map/json/world.json');
+    const local = await fetch('/static/maps/world.json', {cache:'no-store'});
+    if (local.ok) {
+      const geo = await local.json();
+      echarts.registerMap('world', geo);
+      return true;
+    }
+  }catch(e){}
+
+  // 兜底CDN
+  try{
+    const res = await fetch('https://fastly.jsdelivr.net/npm/echarts/map/json/world.json');
     const geo = await res.json();
     echarts.registerMap('world', geo);
     return true;
