@@ -14,7 +14,7 @@
     .panel{border:1px solid #334155;border-radius:14px;background:#0b1220;padding:12px}
     #worldWrap{position:relative;display:flex;justify-content:center;align-items:center;padding:0}
     #worldWrap::before,#worldWrap::after{display:none}
-    #worldMap{width:100%;height:720px;border-radius:12px;overflow:hidden;background:linear-gradient(180deg,#0b1220 0%,#071224 100%);border:1px solid #223248;box-shadow:0 8px 30px rgba(2,6,23,.45);filter:contrast(1.08) saturate(1.04);}
+    #worldMap{width:100%;height:min(72vh,720px);min-height:360px;border-radius:12px;overflow:hidden;background:linear-gradient(180deg,#0b1220 0%,#071224 100%);border:1px solid #223248;box-shadow:0 8px 30px rgba(2,6,23,.45);filter:contrast(1.08) saturate(1.04);}
     .zoom-tools{position:absolute;right:14px;top:14px;display:grid;gap:6px;z-index:4}
     .zbtn{width:32px;height:32px;border-radius:8px;border:1px solid #334155;background:#0f172a;color:#e2e8f0;cursor:pointer}
     .toolbar{display:flex;gap:8px;flex-wrap:wrap;margin:8px 0}
@@ -26,7 +26,8 @@
     .news-item a{color:#93c5fd;text-decoration:none;font-weight:600}
     .meta{color:#94a3b8;font-size:12px;margin-top:4px}
     .badge{display:inline-block;padding:2px 8px;border:1px solid #334155;border-radius:999px;margin-right:6px;font-size:12px}
-    @media (max-width: 1000px){.layout{grid-template-columns:1fr}#worldMap{height:460px}}
+    @media (max-width: 1000px){.layout{grid-template-columns:1fr}#worldMap{height:min(56vh,480px);min-height:300px}}
+    @media (max-width: 520px){#worldMap{height:min(50vh,420px);min-height:260px}}
   </style>
 </head>
 <body>
@@ -80,7 +81,8 @@ const aliasToKey = {
 let currentRegion='china';
 let currentSort='heat';
 const mapEl = document.getElementById('worldMap');
-const chart=echarts.init(mapEl);
+let chart = null;
+try { chart = echarts.init(mapEl); } catch (e) { console.error('echarts init failed', e); }
 
 function showMapError(msg){
   mapEl.innerHTML = `<div style="height:100%;display:flex;align-items:center;justify-content:center;color:#94a3b8">${msg}</div>`;
@@ -118,6 +120,7 @@ function pulseData(region,count){
 }
 
 async function renderMap(region='china',count=10){
+  if(!chart){ showMapError('地图组件初始化失败，请刷新重试'); return; }
   const ok = await ensureWorldMap();
   if(!ok){ showMapError('地图底图加载失败，请刷新重试'); return; }
   chart.clear();
@@ -202,9 +205,11 @@ document.getElementById('sortBar').onclick=(e)=>{
   const b=e.target.closest('.sort'); if(!b) return; setSort(b.dataset.sort);
 };
 
-document.getElementById('zoomIn').onclick=()=>chart.dispatchAction({type:'geoRoam',componentType:'geo',zoom:1.2});
-document.getElementById('zoomOut').onclick=()=>chart.dispatchAction({type:'geoRoam',componentType:'geo',zoom:0.84});
+document.getElementById('zoomIn').onclick=()=>{ if(chart) chart.dispatchAction({type:'geoRoam',componentType:'geo',zoom:1.2}); };
+document.getElementById('zoomOut').onclick=()=>{ if(chart) chart.dispatchAction({type:'geoRoam',componentType:'geo',zoom:0.84}); };
 document.getElementById('zoomReset').onclick=()=>renderMap(currentRegion,10);
+window.addEventListener('resize', ()=>{ try{ chart && chart.resize(); }catch(e){} });
+window.addEventListener('orientationchange', ()=>{ setTimeout(()=>{ try{ chart && chart.resize(); }catch(e){} }, 180); });
 
 mountSelectors();
 renderMap(currentRegion,10);
