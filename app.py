@@ -1280,6 +1280,30 @@ def _fetch_latest_lpr() -> dict:
     }
 
 
+def _fetch_latest_mlf() -> dict:
+    idx = "https://www.pbc.gov.cn/zhengcehuobisi/125207/125213/125437/125446/125873/index.html"
+    r = requests.get(idx, timeout=10, headers={"User-Agent": "Mozilla/5.0"})
+    r.encoding = "utf-8"
+    links = re.findall(r'<a[^>]+href="([^"]+)"[^>]*>(.*?)</a>', r.text, flags=re.I | re.S)
+    target_url = ""
+    for href, inner in links:
+        title = re.sub(r"<[^>]+>", "", inner)
+        title = re.sub(r"\s+", " ", title).strip()
+        if "中期借贷便利" in title and "公告" in title:
+            target_url = _normalize_url(idx, href)
+            break
+    if not target_url:
+        return {}
+
+    d = requests.get(target_url, timeout=10, headers={"User-Agent": "Mozilla/5.0"})
+    d.encoding = "utf-8"
+    txt = _extract_text(d.text)
+    date = (re.findall(r"(\d{4}年\d{1,2}月\d{1,2}日)", txt) or [""])[0]
+    amount = (re.findall(r"开展(\d+\s*亿元)MLF", txt) or re.findall(r"(\d+\s*亿元)MLF", txt) or [""])[0]
+    term = (re.findall(r"期限为?([0-9]+年期)", txt) or re.findall(r"期限为?([0-9]+个月)", txt) or [""])[0]
+    return {"date": date, "amount": amount.replace(" ", ""), "term": term, "url": target_url}
+
+
 def _policy_live_metrics() -> dict:
     out = {}
     try:
@@ -1290,13 +1314,39 @@ def _policy_live_metrics() -> dict:
         out["lpr"] = _fetch_latest_lpr()
     except Exception:
         out["lpr"] = {}
+    try:
+        out["mlf"] = _fetch_latest_mlf()
+    except Exception:
+        out["mlf"] = {}
     return out
+
+
+def _policy_latest_notices() -> dict:
+    news = (_policy_news().get("items") or [])[:30]
+
+    def pick(*keywords):
+        for it in news:
+            t = it.get("title") or ""
+            if all(k in t for k in keywords):
+                return {"title": t, "url": it.get("url", ""), "source": it.get("source", "")}
+        return {"title": "暂无匹配公告", "url": "", "source": ""}
+
+    return {
+        "rrr": pick("准备金") if news else {"title": "暂无匹配公告", "url": "", "source": ""},
+        "reloan": pick("再贷款") if news else {"title": "暂无匹配公告", "url": "", "source": ""},
+        "psl": pick("结构", "工具") if news else {"title": "暂无匹配公告", "url": "", "source": ""},
+        "fiscal": pick("财政") if news else {"title": "暂无匹配公告", "url": "", "source": ""},
+        "bond": pick("国债") if news else {"title": "暂无匹配公告", "url": "", "source": ""},
+        "tax": pick("税") if news else {"title": "暂无匹配公告", "url": "", "source": ""},
+    }
 
 
 def _policy_catalog() -> dict:
     live = _policy_live_metrics()
     omo = live.get("omo_7d") or {}
     lpr = live.get("lpr") or {}
+    mlf = live.get("mlf") or {}
+    notices = _policy_latest_notices()
     return {
         "updated_at": _cn_now().strftime("%Y-%m-%d %H:%M:%S"),
         "fiscal": [
@@ -1318,6 +1368,9 @@ def _policy_catalog() -> dict:
                 "signals": ["新增专项债额度", "投向结构", "项目开工率"],
                 "mechanism": "以项目为载体形成投资增量，提升固定资产投资。",
                 "impact": "建筑建材、工程机械、区域基建链受益更直接。",
+                "table": [
+                    {"metric": "最近专项债相关公告", "latest": notices.get("fiscal",{}).get("title") or "暂无", "freq": "滚动", "source": notices.get("fiscal",{}).get("url") or "官方渠道"},
+                ],
             },
             {
                 "name": "超长期特别国债",
@@ -1325,6 +1378,9 @@ def _policy_catalog() -> dict:
                 "signals": ["发行规模", "期限结构", "资金投向"],
                 "mechanism": "以长期低成本资金支持长期战略项目。",
                 "impact": "高端制造、能源安全、科技创新相关方向受关注。",
+                "table": [
+                    {"metric": "最近国债相关公告", "latest": notices.get("bond",{}).get("title") or "暂无", "freq": "滚动", "source": notices.get("bond",{}).get("url") or "官方渠道"},
+                ],
             },
             {
                 "name": "减税降费",
@@ -1332,6 +1388,9 @@ def _policy_catalog() -> dict:
                 "signals": ["税费减免规模", "制造业税负", "小微企业税收优惠覆盖"],
                 "mechanism": "降低税费后企业利润与居民可支配收入边际改善。",
                 "impact": "中小企业、制造业、可选消费修复弹性较大。",
+                "table": [
+                    {"metric": "最近税费政策公告", "latest": notices.get("tax",{}).get("title") or "暂无", "freq": "滚动", "source": notices.get("tax",{}).get("url") or "官方渠道"},
+                ],
             },
             {
                 "name": "转移支付",
@@ -1339,6 +1398,9 @@ def _policy_catalog() -> dict:
                 "signals": ["一般性转移支付", "均衡性转移支付", "民生类支出占比"],
                 "mechanism": "缓解地方财力约束，保障民生与公共服务支出。",
                 "impact": "区域经济稳定性提升，民生链条需求更稳。",
+                "table": [
+                    {"metric": "最近财政/转移支付公告", "latest": notices.get("fiscal",{}).get("title") or "暂无", "freq": "滚动", "source": notices.get("fiscal",{}).get("url") or "官方渠道"},
+                ],
             },
         ],
         "monetary": [
@@ -1348,6 +1410,9 @@ def _policy_catalog() -> dict:
                 "signals": ["法定准备金率", "中长期流动性缺口", "银行负债成本"],
                 "mechanism": "降低缴准后释放可贷资金，缓解银行负债端压力。",
                 "impact": "银行、地产链与高股息资产估值中枢通常受影响。",
+                "table": [
+                    {"metric": "最近准备金政策公告", "latest": notices.get("rrr",{}).get("title") or "暂无", "freq": "滚动", "source": notices.get("rrr",{}).get("url") or "人民银行"},
+                ],
             },
             {
                 "name": "政策利率(7天逆回购/MLF)",
@@ -1355,6 +1420,11 @@ def _policy_catalog() -> dict:
                 "signals": ["7天逆回购利率", "MLF利率", "DR007"],
                 "mechanism": "政策利率变动向货币市场和贷款利率传导。",
                 "impact": "成长股估值、债券收益率、融资敏感行业受影响。",
+                "table": [
+                    {"metric": "最新MLF操作量", "latest": mlf.get("amount") or "抓取失败", "freq": "月", "source": mlf.get("url") or "人民银行"},
+                    {"metric": "最新MLF期限", "latest": mlf.get("term") or "抓取失败", "freq": "月", "source": mlf.get("url") or "人民银行"},
+                    {"metric": "实施日期", "latest": mlf.get("date") or "抓取失败", "freq": "月", "source": mlf.get("url") or "人民银行"},
+                ],
             },
             {
                 "name": "LPR",
@@ -1386,6 +1456,9 @@ def _policy_catalog() -> dict:
                 "signals": ["工具额度", "投向占比", "加权融资成本"],
                 "mechanism": "定向低成本资金支持特定领域信用扩张。",
                 "impact": "科创、小微产业链与绿色投资方向受益明显。",
+                "table": [
+                    {"metric": "最近再贷款相关公告", "latest": notices.get("reloan",{}).get("title") or "暂无", "freq": "滚动", "source": notices.get("reloan",{}).get("url") or "人民银行"},
+                ],
             },
             {
                 "name": "PSL/结构性工具",
@@ -1393,6 +1466,9 @@ def _policy_catalog() -> dict:
                 "signals": ["新增PSL", "结构性货币工具余额", "政策导向行业融资"],
                 "mechanism": "通过政策性金融渠道提供中长期定向资金。",
                 "impact": "保障房、城中村改造、公共设施链条受影响。",
+                "table": [
+                    {"metric": "最近结构性工具公告", "latest": notices.get("psl",{}).get("title") or "暂无", "freq": "滚动", "source": notices.get("psl",{}).get("url") or "人民银行"},
+                ],
             },
         ],
         "combo": [
