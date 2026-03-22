@@ -141,7 +141,7 @@ def _fetch_universe_realtime(limit_pages: int = 12) -> list[dict]:
             "ut": "fa5fd1943c7b386f172d6893dbfba10b",
         }
         try:
-            r = _rq_get(url, params=params, timeout=8)
+            r = _rq_get(url, params=params, timeout=4, tries=1)
             r.raise_for_status()
             diff = ((r.json().get("data") or {}).get("diff")) or []
             ok_pages += 1
@@ -239,7 +239,7 @@ def _fetch_daily_kline(code: str, lmt: int = 70) -> list[dict]:
         "lmt": lmt,
         "end": "20500000",
     }
-    r = _rq_get(url, params=params, timeout=8)
+    r = _rq_get(url, params=params, timeout=3, tries=1)
     r.raise_for_status()
     kl = ((r.json().get("data") or {}).get("klines")) or []
     out = []
@@ -266,7 +266,7 @@ def _fetch_industry_flow_top10() -> list[dict]:
         "fields": "f12,f14,f2,f3,f62,f184,f128,f136",
         "ut": "fa5fd1943c7b386f172d6893dbfba10b",
     }
-    r = _rq_get(url, params=params, timeout=8)
+    r = _rq_get(url, params=params, timeout=3, tries=1)
     r.raise_for_status()
     diff = ((r.json().get("data") or {}).get("diff")) or []
     out = []
