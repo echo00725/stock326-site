@@ -13,9 +13,9 @@
     .layout{display:grid;grid-template-columns:46% 54%;gap:14px;margin-top:12px}
     .panel{border:1px solid #334155;border-radius:14px;background:#0b1220;padding:12px}
     #worldWrap{position:relative;display:flex;justify-content:center;align-items:center;padding:8px 0}
-    #worldWrap::before{content:'';position:absolute;width:min(640px,92vw);height:min(640px,92vw);border-radius:50%;background:radial-gradient(circle at 35% 30%,rgba(255,255,255,.10),rgba(255,255,255,0) 42%);pointer-events:none;z-index:2}
-    #worldWrap::after{content:'';position:absolute;width:min(640px,92vw);height:min(640px,92vw);border-radius:50%;box-shadow:inset -18px -22px 36px rgba(0,0,0,.30), inset 10px 8px 18px rgba(255,255,255,.05), 0 0 28px rgba(59,130,246,.16);pointer-events:none;z-index:2}
-    #worldMap{width:min(640px,92vw);height:min(640px,92vw);border-radius:50%;overflow:hidden;background:radial-gradient(circle at 30% 30%,#173458 0%,#0b1b2f 45%,#020617 80%);transform:perspective(1000px) rotateX(10deg) scale(1.01);transform-origin:center 58%;}
+    #worldWrap::before{content:'';position:absolute;width:min(640px,92vw);height:min(640px,92vw);border-radius:50%;background:radial-gradient(circle at 32% 28%,rgba(255,255,255,.18),rgba(255,255,255,0) 36%);pointer-events:none;z-index:3}
+    #worldWrap::after{content:'';position:absolute;width:min(640px,92vw);height:min(640px,92vw);border-radius:50%;background:radial-gradient(circle at 70% 72%,rgba(0,0,0,.36),rgba(0,0,0,0) 46%);box-shadow:inset -26px -26px 60px rgba(0,0,0,.36), inset 12px 10px 24px rgba(255,255,255,.05), 0 0 28px rgba(59,130,246,.16);pointer-events:none;z-index:3}
+    #worldMap{width:min(640px,92vw);height:min(640px,92vw);border-radius:50%;overflow:hidden;background:radial-gradient(circle at 30% 30%,#173458 0%,#0b1b2f 45%,#020617 80%);transform:none;filter:contrast(1.08) saturate(1.06);}
     .zoom-tools{position:absolute;right:14px;top:14px;display:grid;gap:6px;z-index:4}
     .zbtn{width:32px;height:32px;border-radius:8px;border:1px solid #334155;background:#0f172a;color:#e2e8f0;cursor:pointer}
     .toolbar{display:flex;gap:8px;flex-wrap:wrap;margin:8px 0}
@@ -125,8 +125,8 @@ async function renderMap(region='china',count=10){
   chart.setOption({
     backgroundColor:'transparent',
     geo:{
-      map:'world', roam:true, zoom:1.25, layoutCenter:['50%','53%'], layoutSize:'102%',
-      itemStyle:{areaColor:'#1a3557',borderColor:'#6ea8ff',borderWidth:0.9},
+      map:'world', roam:true, zoom:1.18, layoutCenter:['50%','51%'], layoutSize:'100%',
+      itemStyle:{areaColor:'#183554',borderColor:'#7fb1ff',borderWidth:0.85},
       emphasis:{itemStyle:{areaColor:'#3b82f6'}},
       label:{show:false}
     },
