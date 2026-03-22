@@ -178,6 +178,7 @@ function renderNews(data, displayName=''){
         <span class="badge">热度 ${i.heat||0}</span>
         <span class="badge">影响 ${i.impact||'中性'}</span>
         <span class="badge">时间 ${(i.published||'').replace('T',' ').slice(0,16) || '-'}</span>
+        <span class="badge">来源 ${i.source_name || '-'}</span>
       </div>
       <div class="meta">${i.abstract||''}</div>
     </div>

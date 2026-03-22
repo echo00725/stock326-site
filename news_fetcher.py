@@ -276,6 +276,82 @@ def _region_cfg(region: str) -> dict:
     }
 
 
+
+
+def _region_media_sources(cfg: dict) -> list[dict]:
+    key = cfg.get("key", "")
+    g = lambda q, hl=cfg.get("hl","en-US"), gl=cfg.get("gl","US"), ceid=cfg.get("ceid","US:en"): _google_rss(q, hl, gl, ceid)
+
+    m = {
+        "china": [
+            {"name":"Google CN", "url": g("China economy policy markets")},
+            {"name":"新华社", "url":"https://www.xinhuanet.com/politics/news_politics.xml"},
+            {"name":"中新网", "url":"https://www.chinanews.com.cn/rss/china.xml"},
+            {"name":"财联社", "url":"https://www.cls.cn/rss.xml"},
+            {"name":"界面新闻", "url":"https://www.jiemian.com/rss/index.xml"},
+        ],
+        "us": [
+            {"name":"Google US", "url": g("United States economy policy markets", "en-US","US","US:en")},
+            {"name":"Reuters US", "url":"https://feeds.reuters.com/reuters/usBusinessNews"},
+            {"name":"CNBC", "url":"https://www.cnbc.com/id/100003114/device/rss/rss.html"},
+            {"name":"NYT Business", "url":"https://rss.nytimes.com/services/xml/rss/nyt/Business.xml"},
+            {"name":"WSJ World", "url":"https://feeds.a.dj.com/rss/RSSWorldNews.xml"},
+        ],
+        "europe": [
+            {"name":"Google Europe", "url": g("Europe economy ECB policy markets", "en-GB","GB","GB:en")},
+            {"name":"BBC Europe", "url":"https://feeds.bbci.co.uk/news/world/europe/rss.xml"},
+            {"name":"Reuters World", "url":"https://feeds.reuters.com/reuters/worldNews"},
+            {"name":"FT World", "url":"https://www.ft.com/world?format=rss"},
+            {"name":"Euronews", "url":"https://www.euronews.com/rss?level=theme&name=europe"},
+        ],
+        "japan": [
+            {"name":"Google Japan", "url": g("Japan economy BoJ policy markets", "ja","JP","JP:ja")},
+            {"name":"Nikkei", "url":"https://www.nikkei.com/rss/"},
+            {"name":"Japan Times", "url":"https://www.japantimes.co.jp/feed/"},
+            {"name":"Reuters World", "url":"https://feeds.reuters.com/reuters/worldNews"},
+            {"name":"BBC World", "url":"https://feeds.bbci.co.uk/news/world/rss.xml"},
+        ],
+        "india": [
+            {"name":"Google India", "url": g("India economy RBI policy markets", "en-IN","IN","IN:en")},
+            {"name":"The Hindu", "url":"https://www.thehindu.com/news/national/feeder/default.rss"},
+            {"name":"Times of India", "url":"https://timesofindia.indiatimes.com/rssfeeds/1221656.cms"},
+            {"name":"Reuters World", "url":"https://feeds.reuters.com/reuters/worldNews"},
+            {"name":"BBC World", "url":"https://feeds.bbci.co.uk/news/world/rss.xml"},
+        ],
+        "middleeast": [
+            {"name":"Google MiddleEast", "url": g("Middle East geopolitics oil markets", "en","AE","AE:en")},
+            {"name":"Al Jazeera", "url":"https://www.aljazeera.com/xml/rss/all.xml"},
+            {"name":"Arab News", "url":"https://www.arabnews.com/rss.xml"},
+            {"name":"Reuters World", "url":"https://feeds.reuters.com/reuters/worldNews"},
+            {"name":"BBC World", "url":"https://feeds.bbci.co.uk/news/world/rss.xml"},
+        ],
+        "uk": [
+            {"name":"Google UK", "url": g("United Kingdom economy BoE policy markets", "en-GB","GB","GB:en")},
+            {"name":"BBC UK", "url":"https://feeds.bbci.co.uk/news/uk/rss.xml"},
+            {"name":"FT UK", "url":"https://www.ft.com/uk?format=rss"},
+            {"name":"Guardian UK", "url":"https://www.theguardian.com/uk-news/rss"},
+            {"name":"Reuters World", "url":"https://feeds.reuters.com/reuters/worldNews"},
+        ],
+        "germany": [
+            {"name":"Google Germany", "url": g("Germany economy markets", "de","DE","DE:de")},
+            {"name":"DW", "url":"https://rss.dw.com/rdf/rss-en-all"},
+            {"name":"Reuters World", "url":"https://feeds.reuters.com/reuters/worldNews"},
+            {"name":"BBC Europe", "url":"https://feeds.bbci.co.uk/news/world/europe/rss.xml"},
+            {"name":"FT Europe", "url":"https://www.ft.com/europe?format=rss"},
+        ],
+    }
+
+    if key in m:
+        return m[key]
+
+    # 其他国家兜底：至少5个来源
+    return [
+        {"name":"Google Local", "url": g(cfg.get("query", "global economy markets"), cfg.get("hl","en-US"), cfg.get("gl","US"), cfg.get("ceid","US:en"))},
+        {"name":"Google Economy", "url": g((cfg.get("name","") + " economy policy").strip(), cfg.get("hl","en-US"), cfg.get("gl","US"), cfg.get("ceid","US:en"))},
+        {"name":"Reuters World", "url":"https://feeds.reuters.com/reuters/worldNews"},
+        {"name":"BBC World", "url":"https://feeds.bbci.co.uk/news/world/rss.xml"},
+        {"name":"CNBC World", "url":"https://www.cnbc.com/id/100727362/device/rss/rss.html"},
+    ]
 def fetch_region_news(region: str = "china", limit: int = 20, sort_by: str = "heat") -> Dict:
     cfg = _region_cfg(region)
     key = cfg["key"]
@@ -287,46 +363,52 @@ def fetch_region_news(region: str = "china", limit: int = 20, sort_by: str = "he
     if cache and (now_ts - float(cache.get("ts", 0.0)) < 180):
         return cache.get("data")  # type: ignore[return-value]
 
-    primary_feed = _google_rss(cfg["query"], cfg["hl"], cfg["gl"], cfg["ceid"])
-    fallback_feeds = [
-        "https://feeds.reuters.com/reuters/worldNews",
-        "https://feeds.bbci.co.uk/news/world/rss.xml",
+    media_sources = _region_media_sources(cfg)
+    # 增强覆盖：为每个国家补充多条 Google 细分检索源，保证“渠道数”
+    extra_q = [
+        cfg.get("query", ""),
+        f"{cfg.get('name','')} economy",
+        f"{cfg.get('name','')} policy",
+        f"{cfg.get('name','')} markets",
+        f"{cfg.get('name','')} geopolitics",
     ]
+    for i, q in enumerate(extra_q, 1):
+        if not q.strip():
+            continue
+        media_sources.append({"name": f"Google-{i}", "url": _google_rss(q, cfg.get("hl","en-US"), cfg.get("gl","US"), cfg.get("ceid","US:en"))})
+
+    # 去重渠道URL
+    dedup = {}
+    for s in media_sources:
+        dedup[s["url"]] = s
+    media_sources = list(dedup.values())
 
     rows = []
     seen = set()
+    used_sources = []
+    per_src = max(3, min(8, (limit // max(len(media_sources),1)) + 2))
 
-    # 先尽量保留“该国家”主查询结果
-    try:
-        d0 = feedparser.parse(primary_feed)
-        primary_items = _recent(d0.entries, translate_titles=True, max_translate=10)
-    except Exception:
-        primary_items = []
-    for it in primary_items:
-        k = (it.get("title") or "", it.get("link") or "")
-        if k in seen:
-            continue
-        seen.add(k)
-        rows.append(it)
-        if len(rows) >= limit:
-            break
-
-    # 主源不足时才用全球源补齐，避免“点国家但新闻几乎不变”
-    if len(rows) < max(4, limit // 2):
-      for feed in fallback_feeds:
+    for src in media_sources:
         try:
-            d = feedparser.parse(feed)
-            items = _recent(d.entries, translate_titles=True, max_translate=8)
+            d = feedparser.parse(src["url"])
+            items = _recent(d.entries, translate_titles=True, max_translate=10)
         except Exception:
             items = []
+        take = 0
         for it in items:
             k = (it.get("title") or "", it.get("link") or "")
             if k in seen:
                 continue
             seen.add(k)
+            it["source_name"] = src["name"]
             rows.append(it)
-            if len(rows) >= limit * 2:
+            take += 1
+            if take >= per_src or len(rows) >= limit * 2:
                 break
+        if take > 0:
+            used_sources.append(src["name"])
+        if len(rows) >= limit * 2:
+            break
 
     # 地区相关性打分，避免“点国家但新闻几乎不变”
     for it in rows:
@@ -347,6 +429,10 @@ def fetch_region_news(region: str = "china", limit: int = 20, sort_by: str = "he
         "updated_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
         "region": key,
         "region_name": cfg["name"],
+        "sources_used": used_sources,
+        "source_count": len(used_sources),
+        "sources_configured": [s.get("name") for s in media_sources[:12]],
+        "source_pool_count": len(media_sources),
         "items": rows,
     }
     _REGION_NEWS_CACHE[ck] = {"ts": now_ts, "data": data}
