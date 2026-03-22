@@ -12,7 +12,8 @@
     .top{display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap}
     .layout{display:grid;grid-template-columns:46% 54%;gap:14px;margin-top:12px}
     .panel{border:1px solid #334155;border-radius:14px;background:#0b1220;padding:12px}
-    #worldMap{height:720px;border-radius:12px;overflow:hidden;background:radial-gradient(ellipse at center,#0b1b2f 0%,#020617 75%)}
+    #worldWrap{display:flex;justify-content:center;align-items:center;padding:8px 0}
+    #worldMap{width:min(640px,92vw);height:min(640px,92vw);border-radius:50%;overflow:hidden;background:radial-gradient(circle at 30% 30%,#173458 0%,#0b1b2f 45%,#020617 80%);box-shadow:inset -30px -30px 80px rgba(0,0,0,.45), 0 0 40px rgba(59,130,246,.2)}
     .toolbar{display:flex;gap:8px;flex-wrap:wrap;margin:8px 0}
     .chip,.sort{padding:6px 10px;border:1px solid #334155;border-radius:999px;background:#111827;color:#e2e8f0;cursor:pointer;font-size:12px}
     .chip.active,.sort.active{background:#1d4ed8;border-color:#1d4ed8}
@@ -35,7 +36,7 @@
 
   <div class="layout">
     <section class="panel">
-      <div id="worldMap"></div>
+      <div id="worldWrap"><div id="worldMap"></div></div>
       <select id="countrySelect" class="country-select"></select>
       <div class="toolbar" id="quickRegions"></div>
     </section>

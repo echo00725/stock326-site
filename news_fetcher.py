@@ -227,11 +227,11 @@ def _recent(entries, hours: int = 24, translate_titles: bool = False, max_transl
 
 
 REGION_PRESETS = {
-    "china": {"name": "中国", "query": "China economy policy markets", "gl": "CN", "hl": "zh-CN", "ceid": "CN:zh-Hans"},
-    "us": {"name": "美国", "query": "United States economy policy markets", "gl": "US", "hl": "en-US", "ceid": "US:en"},
-    "europe": {"name": "欧洲", "query": "Europe economy policy ECB markets", "gl": "GB", "hl": "en-GB", "ceid": "GB:en"},
-    "japan": {"name": "日本", "query": "Japan economy BoJ policy markets", "gl": "JP", "hl": "ja", "ceid": "JP:ja"},
-    "middleeast": {"name": "中东", "query": "Middle East geopolitics oil markets", "gl": "AE", "hl": "en", "ceid": "AE:en"},
+    "china": {"name": "中国", "query": "China economy policy markets", "gl": "CN", "hl": "zh-CN", "ceid": "CN:zh-Hans", "keywords": ["china","chinese","beijing","shanghai","中国","北京"]},
+    "us": {"name": "美国", "query": "United States economy policy markets", "gl": "US", "hl": "en-US", "ceid": "US:en", "keywords": ["united states","u.s.","america","fed","washington","美国"]},
+    "europe": {"name": "欧洲", "query": "Europe economy policy ECB markets", "gl": "GB", "hl": "en-GB", "ceid": "GB:en", "keywords": ["europe","ecb","eu","euro zone","欧洲"]},
+    "japan": {"name": "日本", "query": "Japan economy BoJ policy markets", "gl": "JP", "hl": "ja", "ceid": "JP:ja", "keywords": ["japan","boj","tokyo","日本"]},
+    "middleeast": {"name": "中东", "query": "Middle East geopolitics oil markets", "gl": "AE", "hl": "en", "ceid": "AE:en", "keywords": ["middle east","saudi","iran","israel","oil","中东"]},
     "india": {"name": "印度", "query": "India economy RBI policy markets", "gl": "IN", "hl": "en-IN", "ceid": "IN:en"},
     "russia": {"name": "俄罗斯", "query": "Russia economy central bank policy", "gl": "RU", "hl": "en", "ceid": "RU:en"},
     "brazil": {"name": "巴西", "query": "Brazil economy central bank policy", "gl": "BR", "hl": "pt-BR", "ceid": "BR:pt-419"},
@@ -261,6 +261,7 @@ def _region_cfg(region: str) -> dict:
     if key in REGION_PRESETS:
         cfg = dict(REGION_PRESETS[key])
         cfg["key"] = key
+        cfg.setdefault("keywords", [cfg.get("name", "").lower()])
         return cfg
     # 任意国家名兜底：用 Google RSS 搜索生成
     pretty = region.strip() or "Global"
@@ -271,12 +272,14 @@ def _region_cfg(region: str) -> dict:
         "hl": "en-US",
         "gl": "US",
         "ceid": "US:en",
+        "keywords": [pretty.lower()],
     }
 
 
 def fetch_region_news(region: str = "china", limit: int = 20, sort_by: str = "heat") -> Dict:
     cfg = _region_cfg(region)
     key = cfg["key"]
+    kws = [k.lower() for k in (cfg.get("keywords") or []) if k]
 
     now_ts = time.time()
     ck = f"{key}:{limit}:{sort_by}"
@@ -284,15 +287,32 @@ def fetch_region_news(region: str = "china", limit: int = 20, sort_by: str = "he
     if cache and (now_ts - float(cache.get("ts", 0.0)) < 180):
         return cache.get("data")  # type: ignore[return-value]
 
-    feeds = [
-        _google_rss(cfg["query"], cfg["hl"], cfg["gl"], cfg["ceid"]),
+    primary_feed = _google_rss(cfg["query"], cfg["hl"], cfg["gl"], cfg["ceid"])
+    fallback_feeds = [
         "https://feeds.reuters.com/reuters/worldNews",
         "https://feeds.bbci.co.uk/news/world/rss.xml",
     ]
 
     rows = []
     seen = set()
-    for feed in feeds:
+
+    # 先尽量保留“该国家”主查询结果
+    try:
+        d0 = feedparser.parse(primary_feed)
+        primary_items = _recent(d0.entries, translate_titles=True, max_translate=10)
+    except Exception:
+        primary_items = []
+    for it in primary_items:
+        k = (it.get("title") or "", it.get("link") or "")
+        if k in seen:
+            continue
+        seen.add(k)
+        rows.append(it)
+        if len(rows) >= max(8, limit):
+            break
+
+    # 再用全球源补齐
+    for feed in fallback_feeds:
         try:
             d = feedparser.parse(feed)
             items = _recent(d.entries, translate_titles=True, max_translate=8)
@@ -307,13 +327,19 @@ def fetch_region_news(region: str = "china", limit: int = 20, sort_by: str = "he
             if len(rows) >= limit * 2:
                 break
 
+    # 地区相关性打分，避免“点国家但新闻几乎不变”
+    for it in rows:
+        blob = f"{it.get('title','')} {it.get('title_zh','')} {it.get('summary','')}".lower()
+        rel = sum(1 for k in kws if k and k in blob)
+        it["region_rel"] = rel
+
     if sort_by == "time":
-        rows = sorted(rows, key=lambda x: x.get("published_ts", 0), reverse=True)
+        rows = sorted(rows, key=lambda x: (x.get("region_rel", 0), x.get("published_ts", 0)), reverse=True)
     elif sort_by == "impact":
         rank = {"利多": 3, "中性": 2, "利空": 1}
-        rows = sorted(rows, key=lambda x: (rank.get(x.get("impact", "中性"), 2), x.get("heat", 0)), reverse=True)
+        rows = sorted(rows, key=lambda x: (x.get("region_rel", 0), rank.get(x.get("impact", "中性"), 2), x.get("heat", 0)), reverse=True)
     else:
-        rows = sorted(rows, key=lambda x: (x.get("heat", 0), x.get("published_ts", 0)), reverse=True)
+        rows = sorted(rows, key=lambda x: (x.get("region_rel", 0), x.get("heat", 0), x.get("published_ts", 0)), reverse=True)
 
     rows = rows[:limit]
     data = {
