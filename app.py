@@ -1318,9 +1318,137 @@ def _policy_live_metrics() -> dict:
         out["mlf"] = _fetch_latest_mlf()
     except Exception:
         out["mlf"] = {}
+    try:
+        out["omo_hist"] = _fetch_omo_7d_history(limit=5)
+    except Exception:
+        out["omo_hist"] = []
+    try:
+        out["lpr_hist"] = _fetch_lpr_history(limit=5)
+    except Exception:
+        out["lpr_hist"] = []
+    try:
+        out["mlf_hist"] = _fetch_mlf_history(limit=5)
+    except Exception:
+        out["mlf_hist"] = []
     return out
 
 
+
+
+def _fetch_omo_7d_history(limit: int = 5) -> list[dict]:
+    idx = "https://www.pbc.gov.cn/zhengcehuobisi/125207/125213/125431/125475/index.html"
+    r = requests.get(idx, timeout=10, headers={"User-Agent": "Mozilla/5.0"})
+    r.encoding = "utf-8"
+    links = re.findall(r'<a[^>]+href="([^"]+)"[^>]*>(.*?)</a>', r.text, flags=re.I | re.S)
+    out = []
+    seen = set()
+    for href, inner in links:
+        title = re.sub(r"<[^>]+>", "", inner)
+        title = re.sub(r"\s+", " ", title).strip()
+        if "公开市场业务交易公告" not in title:
+            continue
+        u = _normalize_url(idx, href)
+        if u in seen:
+            continue
+        seen.add(u)
+        try:
+            d = requests.get(u, timeout=10, headers={"User-Agent": "Mozilla/5.0"})
+            d.encoding = "utf-8"
+            txt = _extract_text(d.text)
+            date = (re.findall(r"(\d{4}年\d{1,2}月\d{1,2}日)", txt) or [""])[0]
+            amt = (re.findall(r"(\d+\s*亿元)7天期逆回购", txt) or re.findall(r"(\d+\s*亿元)", txt) or [""])[0].replace(" ","")
+            rate = (re.findall(r"7\s*天\s*([0-9]\s*\.?\s*[0-9]+)\s*%", txt) or [""])[0].replace(" ","")
+            out.append({"date": date, "rate": (rate+"%") if rate else "", "amount": amt, "url": u})
+        except Exception:
+            continue
+        if len(out) >= limit:
+            break
+    return out
+
+
+def _fetch_lpr_history(limit: int = 5) -> list[dict]:
+    idx = "https://www.pbc.gov.cn/zhengcehuobisi/125207/125213/125440/3876551/index.html"
+    r = requests.get(idx, timeout=10, headers={"User-Agent": "Mozilla/5.0"})
+    r.encoding = "utf-8"
+    links = re.findall(r'<a[^>]+href="([^"]+)"[^>]*>(.*?)</a>', r.text, flags=re.I | re.S)
+    out = []
+    seen = set()
+    for href, inner in links:
+        title = re.sub(r"<[^>]+>", "", inner)
+        title = re.sub(r"\s+", " ", title).strip()
+        if "LPR" not in title or "公告" not in title:
+            continue
+        u = _normalize_url(idx, href)
+        if u in seen:
+            continue
+        seen.add(u)
+        try:
+            d = requests.get(u, timeout=10, headers={"User-Agent": "Mozilla/5.0"})
+            d.encoding = "utf-8"
+            txt = _extract_text(d.text)
+            date = (re.findall(r"(\d{4}年\d{1,2}月\d{1,2}日)", txt) or [""])[0]
+            l1 = (re.findall(r"1年期LPR为\s*([0-9]+\.?\d*)\s*%", txt) or [""])[0]
+            l5 = (re.findall(r"5年期以上LPR为\s*([0-9]+\.?\d*)\s*%", txt) or [""])[0]
+            out.append({"date": date, "lpr1": (l1+"%") if l1 else "", "lpr5": (l5+"%") if l5 else "", "url": u})
+        except Exception:
+            continue
+        if len(out) >= limit:
+            break
+    return out
+
+
+def _fetch_mlf_history(limit: int = 5) -> list[dict]:
+    idx = "https://www.pbc.gov.cn/zhengcehuobisi/125207/125213/125437/125446/125873/index.html"
+    r = requests.get(idx, timeout=10, headers={"User-Agent": "Mozilla/5.0"})
+    r.encoding = "utf-8"
+    links = re.findall(r'<a[^>]+href="([^"]+)"[^>]*>(.*?)</a>', r.text, flags=re.I | re.S)
+    out = []
+    seen = set()
+    for href, inner in links:
+        title = re.sub(r"<[^>]+>", "", inner)
+        title = re.sub(r"\s+", " ", title).strip()
+        if "中期借贷便利" not in title or "公告" not in title:
+            continue
+        u = _normalize_url(idx, href)
+        if u in seen:
+            continue
+        seen.add(u)
+        try:
+            d = requests.get(u, timeout=10, headers={"User-Agent": "Mozilla/5.0"})
+            d.encoding = "utf-8"
+            txt = _extract_text(d.text)
+            date = (re.findall(r"(\d{4}年\d{1,2}月\d{1,2}日)", txt) or [""])[0]
+            amount = (re.findall(r"开展(\d+\s*亿元)MLF", txt) or re.findall(r"(\d+\s*亿元)MLF", txt) or [""])[0].replace(" ","")
+            term = (re.findall(r"期限为?([0-9]+年期)", txt) or re.findall(r"期限为?([0-9]+个月)", txt) or [""])[0]
+            out.append({"date": date, "amount": amount, "term": term, "url": u})
+        except Exception:
+            continue
+        if len(out) >= limit:
+            break
+    return out
+
+
+def _notice_rows_by_source(source_kw: str, limit: int = 5) -> list[dict]:
+    items = (_policy_news().get("items") or [])
+    out = []
+    for it in items:
+        if source_kw not in (it.get("source") or ""):
+            continue
+        url = it.get("url") or ""
+        date, fig = "", ""
+        try:
+            r = requests.get(url, timeout=8, headers={"User-Agent": "Mozilla/5.0"})
+            r.encoding = r.apparent_encoding or "utf-8"
+            txt = _extract_text(r.text)
+            date = (re.findall(r"(\d{4}年\d{1,2}月\d{1,2}日)", txt) or re.findall(r"(\d{4}年\d{2}月\d{2}日)", txt) or [""])[0]
+            nums = re.findall(r"\d+\.?\d*%|\d+\s*亿元|\d+\s*bp", txt, flags=re.I)
+            fig = "、".join([n.replace(" ","") for n in nums[:3]])
+        except Exception:
+            pass
+        out.append({"metric": it.get("title") or "公告", "latest": f"{date or '日期待补'} {fig or ''}".strip(), "freq": "滚动", "source": url or (it.get("source") or "官方")})
+        if len(out) >= limit:
+            break
+    return out
 def _policy_latest_notices() -> dict:
     news = (_policy_news().get("items") or [])[:30]
 
@@ -1399,6 +1527,9 @@ def _policy_catalog() -> dict:
     mlf = live.get("mlf") or {}
     notices = _policy_latest_notices()
     updated = _cn_now().strftime("%Y-%m-%d %H:%M:%S")
+    omo_hist = live.get("omo_hist") or []
+    lpr_hist = live.get("lpr_hist") or []
+    mlf_hist = live.get("mlf_hist") or []
     data = {
         "updated_at": _cn_now().strftime("%Y-%m-%d %H:%M:%S"),
         "fiscal": [
@@ -1553,36 +1684,51 @@ def _policy_catalog() -> dict:
         ],
     }
 
-    notice_map = {
-        "赤字率与财政扩张": notices.get("fiscal", {}),
-        "专项债": notices.get("fiscal", {}),
-        "超长期特别国债": notices.get("bond", {}),
-        "减税降费": notices.get("tax", {}),
-        "转移支付": notices.get("fiscal", {}),
-        "降准(RRR)": notices.get("rrr", {}),
-        "政策利率(7天逆回购/MLF)": notices.get("rrr", {}),
-        "LPR": notices.get("rrr", {}),
-        "OMO逆回购": notices.get("rrr", {}),
-        "再贷款再贴现": notices.get("reloan", {}),
-        "PSL/结构性工具": notices.get("psl", {}),
-    }
+    # 用“近5条历史记录”替代同一条拆5行
+    if omo_hist:
+        for it in data.get("monetary", []):
+            if it.get("name") == "OMO逆回购":
+                it["table"] = [
+                    {"metric": h.get("date") or f"第{i+1}条", "latest": f"利率 {h.get('rate') or '暂无'} / 规模 {h.get('amount') or '暂无'}", "freq": "日", "source": h.get("url") or "人民银行"}
+                    for i, h in enumerate(omo_hist[:5])
+                ]
 
-    for grp in ["fiscal", "monetary", "combo"]:
-        for it in data.get(grp, []):
-            rows = list(it.get("table") or [])
-            n = notice_map.get(it.get("name", ""), {})
-            extras = [
-                {"metric": "数据更新时间", "latest": updated, "freq": "实时", "source": "系统"},
-                {"metric": "最新公告标题", "latest": n.get("title") or "暂无", "freq": "滚动", "source": n.get("url") or n.get("source") or "官方渠道"},
-                {"metric": "最新公告日期", "latest": n.get("date") or "暂无", "freq": "滚动", "source": n.get("source") or "官方渠道"},
-                {"metric": "公告关键数字", "latest": n.get("fig") or "暂无", "freq": "滚动", "source": n.get("url") or "官方渠道"},
-                {"metric": "政策来源", "latest": n.get("source") or "官方渠道", "freq": "滚动", "source": n.get("url") or "官方渠道"},
-            ]
-            for e in extras:
-                if len(rows) >= 5:
-                    break
-                rows.append(e)
-            it["table"] = rows[:5]
+    if lpr_hist:
+        for it in data.get("monetary", []):
+            if it.get("name") == "LPR":
+                it["table"] = [
+                    {"metric": h.get("date") or f"第{i+1}条", "latest": f"1Y {h.get('lpr1') or '暂无'} / 5Y {h.get('lpr5') or '暂无'}", "freq": "月", "source": h.get("url") or "人民银行"}
+                    for i, h in enumerate(lpr_hist[:5])
+                ]
+
+    if mlf_hist:
+        for it in data.get("monetary", []):
+            if it.get("name") == "政策利率(7天逆回购/MLF)":
+                it["table"] = [
+                    {"metric": h.get("date") or f"第{i+1}条", "latest": f"规模 {h.get('amount') or '暂无'} / 期限 {h.get('term') or '暂无'}", "freq": "月", "source": h.get("url") or "人民银行"}
+                    for i, h in enumerate(mlf_hist[:5])
+                ]
+
+    # 其余项目：用各自来源近5条公告（每条独立数据）
+    rows_mof = _notice_rows_by_source("财政部", limit=5)
+    rows_pbc = _notice_rows_by_source("人民银行", limit=5)
+
+    for it in data.get("fiscal", []):
+        if it.get("name") not in ["赤字率与财政扩张"]:
+            it["table"] = (it.get("table") or rows_mof)[:5] if len(it.get("table") or []) >= 5 else (it.get("table") or []) + rows_mof
+            it["table"] = it["table"][:5]
+        else:
+            # 财政扩张保持核心指标 + 两条最新公告
+            base = list(it.get("table") or [])[:3]
+            it["table"] = (base + rows_mof)[:5]
+
+    for it in data.get("monetary", []):
+        if it.get("name") in ["降准(RRR)", "再贷款再贴现", "PSL/结构性工具"]:
+            it["table"] = (it.get("table") or []) + rows_pbc
+            it["table"] = it["table"][:5]
+
+    for it in data.get("combo", []):
+        it["table"] = rows_pbc[:3] + rows_mof[:2]
 
     return data
 
