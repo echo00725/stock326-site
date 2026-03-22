@@ -3,68 +3,145 @@
 <head>
   <meta charset="UTF-8"/>
   <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
-  <title>24小时新闻雷达</title>
+  <title>全球新闻雷达（交互地球）</title>
   <link rel="stylesheet" href="/static/style.css"/>
-<link rel="stylesheet" href="/static/dark.css"/>
+  <link rel="stylesheet" href="/static/dark.css"/>
+  <script src="https://cdn.jsdelivr.net/npm/echarts@5/dist/echarts.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/echarts-gl@2/dist/echarts-gl.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/echarts@5/map/js/world.js"></script>
   <style>
-    .ticker-wrap{overflow:hidden;background:#111827;color:#fff;border-radius:10px;padding:8px 0;margin:12px 0}
-    .ticker{display:inline-block;white-space:nowrap;animation:ticker 35s linear infinite}
-    @keyframes ticker{from{transform:translateX(100%)}to{transform:translateX(-100%)}}
-    .tabs a{margin-right:8px}
-    .news-item{padding:10px;border-bottom:1px solid #eee}
-    .news-item a{font-weight:600;color:#0f172a;text-decoration:none}
-    .muted{color:#64748b;font-size:13px}
+    .top{display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap}
+    .layout{display:grid;grid-template-columns:45% 55%;gap:14px;margin-top:12px}
+    .panel{border:1px solid #334155;border-radius:14px;background:#0b1220;padding:12px}
+    #globe{height:680px}
+    .chips{display:flex;gap:8px;flex-wrap:wrap;margin-top:8px}
+    .chip{padding:6px 10px;border:1px solid #334155;border-radius:999px;background:#111827;color:#e2e8f0;cursor:pointer;font-size:12px}
+    .chip.active{background:#1d4ed8;border-color:#1d4ed8}
+    .news-item{padding:10px 0;border-bottom:1px dashed #334155}
+    .news-item:last-child{border-bottom:none}
+    .news-item a{color:#93c5fd;text-decoration:none;font-weight:600}
+    .meta{color:#94a3b8;font-size:12px;margin-top:4px}
+    .hint{color:#cbd5e1;font-size:13px;margin-top:4px}
+    @media (max-width: 1000px){
+      .layout{grid-template-columns:1fr}
+      #globe{height:420px}
+    }
   </style>
 </head>
 <body>
-  <main class="container">
-    <h1>📰 24小时新闻雷达</h1>
-    <p class="sub">更新时间：{{ data.updated_at }}</p>
-    <div class="tabs">
-      <a class="btn secondary" href="#cn">中国新闻</a>
-      <a class="btn secondary" href="#global">国际新闻</a>
-      <a class="btn" href="/">返回选股首页</a>
-    </div>
+<main class="container">
+  <div class="top">
+    <h1>🌍 全球新闻雷达（交互地球）</h1>
+    <a class="btn secondary" href="/">← 返回功能目录</a>
+  </div>
+  <p class="sub">左侧点击地区，右侧实时展示该地区媒体报道（经济/政策/市场）。</p>
 
-    <div class="ticker-wrap"><div class="ticker">{% for s in data.cn %}{% for i in s['items'][:2] %}【{{ s.source }}】{{ i.title }} &nbsp;&nbsp;&nbsp;{% endfor %}{% endfor %}{% for s in data.global_news %}{% for i in s['items'][:2] %}【{{ s.source }}】{{ i.title }} &nbsp;&nbsp;&nbsp;{% endfor %}{% endfor %}</div></div>
-
-    <section id="cn" class="card">
-      <h2>中国（5个源）</h2>
-      {% for s in data.cn %}
-      <h3>{{ s.source }}</h3>
-      {% for i in s['items'] %}
-      <div class="news-item">
-        <a href="{{ i.link }}" target="_blank">{{ i.title_zh or i.title }}</a>
-        {% if i.title_zh and i.title_zh != i.title %}
-        <div class="muted">原文标题：{{ i.title }}</div>
-        {% endif %}
-        <div>{{ i.abstract }}</div>
-        <div class="muted">影响标签：<strong>{{ i.impact }}</strong>{% if i.events %} ｜ 事件类型：{{ i.events|join('、') }}{% endif %}{% if i.sectors %} ｜ 影响板块：{{ i.sectors|join('、') }}{% endif %}</div>
-        <div class="muted">{{ i.trading_hint }}</div>
-        <div class="muted"><a href="{{ i.link }}" target="_blank">源链接</a></div>
+  <div class="layout">
+    <section class="panel">
+      <div id="globe"></div>
+      <div class="chips" id="quickRegions">
+        <button class="chip active" data-region="china">中国</button>
+        <button class="chip" data-region="us">美国</button>
+        <button class="chip" data-region="europe">欧洲</button>
+        <button class="chip" data-region="japan">日本</button>
+        <button class="chip" data-region="middleeast">中东</button>
       </div>
-      {% endfor %}
-      {% endfor %}
     </section>
 
-    <section id="global" class="card">
-      <h2>国际（5个源）</h2>
-      {% for s in data.global_news %}
-      <h3>{{ s.source }}</h3>
-      {% for i in s['items'] %}
-      <div class="news-item">
-        <a href="{{ i.link }}" target="_blank">{{ i.title_zh or i.title }}</a>
-        {% if i.title_zh and i.title_zh != i.title %}
-        <div class="muted">原文标题：{{ i.title }}</div>
-        {% endif %}
-        <div>{{ i.abstract }}</div>
-        <div class="muted">影响标签：<strong>{{ i.impact }}</strong>{% if i.events %} ｜ 事件类型：{{ i.events|join('、') }}{% endif %}{% if i.sectors %} ｜ 影响板块：{{ i.sectors|join('、') }}{% endif %}</div>
-        <div class="muted">{{ i.trading_hint }}</div>
-        <div class="muted"><a href="{{ i.link }}" target="_blank">源链接</a></div>
-      </div>
-      {% endfor %}
-      {% endfor %}
+    <section class="panel">
+      <h2 id="regionTitle">地区：-</h2>
+      <div class="meta" id="updatedAt">更新时间：-</div>
+      <div id="newsList" style="margin-top:8px"></div>
     </section>
-  </main>
+  </div>
+</main>
+
+<script>
+const regionMap = {
+  'China': 'china', '中国': 'china',
+  'United States of America': 'us', 'United States': 'us', '美国': 'us',
+  'Japan': 'japan', '日本': 'japan',
+  'France': 'europe', 'Germany': 'europe', 'United Kingdom': 'europe', 'Italy': 'europe', 'Spain': 'europe', '欧洲': 'europe',
+  'Saudi Arabia': 'middleeast', 'United Arab Emirates': 'middleeast', 'Israel': 'middleeast', 'Iran': 'middleeast', '中东': 'middleeast'
+};
+
+let currentRegion = 'china';
+const globe = echarts.init(document.getElementById('globe'));
+
+function drawGlobe(){
+  globe.setOption({
+    backgroundColor: 'transparent',
+    globe: {
+      baseTexture: 'https://fastly.jsdelivr.net/gh/apache/echarts-website@asf-site/examples/data-gl/asset/world.topo.bathy.200401.jpg',
+      heightTexture: 'https://fastly.jsdelivr.net/gh/apache/echarts-website@asf-site/examples/data-gl/asset/bathymetry_bw_composite_4k.jpg',
+      shading: 'lambert',
+      light: { main: { intensity: 1.2 }, ambient: { intensity: 0.35 } },
+      viewControl: { autoRotate: true, autoRotateSpeed: 8, targetCoord: [105, 35], distance: 170 },
+      layers: []
+    },
+    series: [{
+      type: 'scatter3D',
+      coordinateSystem: 'globe',
+      symbolSize: 8,
+      itemStyle: { color: '#60a5fa' },
+      data: [
+        { name:'中国', value:[116.4,39.9,2], region:'china' },
+        { name:'美国', value:[-77.0,38.9,2], region:'us' },
+        { name:'欧洲', value:[2.3,48.9,2], region:'europe' },
+        { name:'日本', value:[139.7,35.6,2], region:'japan' },
+        { name:'中东', value:[46.7,24.7,2], region:'middleeast' }
+      ],
+      label: { show:true, formatter: p=>p.data.name, color:'#e2e8f0', fontSize:11 }
+    }]
+  });
+
+  globe.on('click', (p) => {
+    if (p?.data?.region) {
+      selectRegion(p.data.region);
+      return;
+    }
+    const r = regionMap[p.name];
+    if (r) selectRegion(r);
+  });
+}
+
+function setChip(region){
+  document.querySelectorAll('.chip').forEach(x=>x.classList.remove('active'));
+  const target = document.querySelector(`.chip[data-region="${region}"]`);
+  if (target) target.classList.add('active');
+}
+
+async function loadRegionNews(region){
+  const res = await fetch(`/api/news/geo?region=${encodeURIComponent(region)}&limit=24`);
+  const data = await res.json();
+  document.getElementById('regionTitle').textContent = `地区：${data.region_name || region}`;
+  document.getElementById('updatedAt').textContent = `更新时间：${data.updated_at || '-'}`;
+  const items = data.items || [];
+  document.getElementById('newsList').innerHTML = items.length
+    ? items.map(i => `
+      <div class="news-item">
+        <a href="${i.link || '#'}" target="_blank" rel="noopener">${i.title_zh || i.title || '（无标题）'}</a>
+        <div class="hint">${i.abstract || ''}</div>
+        <div class="meta">影响：${i.impact || '中性'} ${i.events?.length ? '｜事件：'+i.events.join('、') : ''} ${i.sectors?.length ? '｜板块：'+i.sectors.join('、') : ''}</div>
+      </div>
+    `).join('')
+    : '<div class="meta">该地区暂无可用新闻，请稍后重试。</div>';
+}
+
+async function selectRegion(region){
+  currentRegion = region;
+  setChip(region);
+  await loadRegionNews(region);
+}
+
+document.getElementById('quickRegions').addEventListener('click', (e) => {
+  const btn = e.target.closest('.chip');
+  if (!btn) return;
+  selectRegion(btn.dataset.region);
+});
+
+drawGlobe();
+selectRegion('china');
+</script>
 </body>
 </html>

@@ -1813,9 +1813,7 @@ def api_policy_news():
 
 @app.route("/news")
 def news_page():
-    from news_fetcher import fetch_news_24h
-
-    return render_template("news.html", data=fetch_news_24h())
+    return render_template("news.html")
 
 
 @app.route("/api/news")
@@ -1823,6 +1821,16 @@ def api_news():
     from news_fetcher import fetch_news_24h
 
     return jsonify(fetch_news_24h())
+
+
+@app.route("/api/news/geo")
+def api_news_geo():
+    from news_fetcher import fetch_region_news
+
+    region = request.args.get("region", "china")
+    limit = int(request.args.get("limit", "20") or 20)
+    limit = max(5, min(limit, 40))
+    return jsonify(fetch_region_news(region=region, limit=limit))
 
 
 @app.route("/volume-profile")

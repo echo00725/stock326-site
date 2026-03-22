@@ -29,6 +29,7 @@ GLOBAL_SOURCES = [
 
 _TRANSLATE_CACHE: Dict[str, str] = {}
 _NEWS_CACHE: Dict[str, object] = {"ts": 0.0, "data": None}
+_REGION_NEWS_CACHE: Dict[str, Dict[str, object]] = {}
 
 
 def _clean_text(t: str) -> str:
@@ -212,6 +213,86 @@ def _recent(entries, hours: int = 24, translate_titles: bool = False, max_transl
             }
         )
     return out
+
+
+REGION_FEEDS = {
+    "china": {
+        "name": "中国",
+        "feeds": [
+            "https://news.google.com/rss/search?q=China+economy+policy&hl=zh-CN&gl=CN&ceid=CN:zh-Hans",
+            "https://www.chinanews.com.cn/rss/world.xml",
+        ],
+    },
+    "us": {
+        "name": "美国",
+        "feeds": [
+            "https://news.google.com/rss/search?q=US+economy+policy+markets&hl=en-US&gl=US&ceid=US:en",
+            "https://feeds.reuters.com/reuters/usBusinessNews",
+        ],
+    },
+    "europe": {
+        "name": "欧洲",
+        "feeds": [
+            "https://news.google.com/rss/search?q=Europe+economy+ECB+policy&hl=en-GB&gl=GB&ceid=GB:en",
+            "https://feeds.bbci.co.uk/news/world/europe/rss.xml",
+        ],
+    },
+    "japan": {
+        "name": "日本",
+        "feeds": [
+            "https://news.google.com/rss/search?q=Japan+economy+BoJ+policy&hl=ja&gl=JP&ceid=JP:ja",
+        ],
+    },
+    "middleeast": {
+        "name": "中东",
+        "feeds": [
+            "https://news.google.com/rss/search?q=Middle+East+oil+geopolitics&hl=en&gl=AE&ceid=AE:en",
+        ],
+    },
+}
+
+
+def fetch_region_news(region: str = "china", limit: int = 20) -> Dict:
+    key = (region or "china").lower()
+    cfg = REGION_FEEDS.get(key) or REGION_FEEDS["china"]
+
+    now_ts = time.time()
+    ck = f"{key}:{limit}"
+    cache = _REGION_NEWS_CACHE.get(ck)
+    if cache and (now_ts - float(cache.get("ts", 0.0)) < 180):
+        return cache.get("data")  # type: ignore[return-value]
+
+    rows = []
+    seen = set()
+    feeds = list(cfg["feeds"])
+    if key != "china":
+        feeds += ["https://feeds.reuters.com/reuters/worldNews", "https://feeds.bbci.co.uk/news/world/rss.xml"]
+
+    for feed in feeds:
+        try:
+            d = feedparser.parse(feed)
+            items = _recent(d.entries, translate_titles=True, max_translate=6)
+        except Exception:
+            items = []
+        for it in items:
+            k = (it.get("title") or "", it.get("link") or "")
+            if k in seen:
+                continue
+            seen.add(k)
+            rows.append(it)
+            if len(rows) >= limit:
+                break
+        if len(rows) >= limit:
+            break
+
+    data = {
+        "updated_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        "region": key,
+        "region_name": cfg["name"],
+        "items": rows,
+    }
+    _REGION_NEWS_CACHE[ck] = {"ts": now_ts, "data": data}
+    return data
 
 
 def fetch_news_24h(limit_per_source: int = 8) -> Dict:
