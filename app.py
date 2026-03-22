@@ -1506,6 +1506,8 @@ def _scrape_links(url: str, source: str, max_items: int = 8) -> list[dict]:
         title = re.sub(r"\s+", " ", title).strip()
         if not href or len(title) < 6:
             continue
+        if href.lower().startswith("javascript"):
+            continue
         if "�" in title:
             continue
         if any(x in title for x in ["登录", "注册", "上一页", "下一页", "更多", "首页"]):
