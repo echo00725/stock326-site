@@ -15,6 +15,9 @@
     .news{display:grid;gap:8px}
     .news a{color:#93c5fd;text-decoration:none}
     .news a:hover{text-decoration:underline}
+    .more{margin-top:8px;padding:6px 10px;border-radius:8px;border:1px solid #475569;background:#111827;color:#e2e8f0;cursor:pointer}
+    .panel{margin-top:12px;border:1px solid #334155;border-radius:12px;background:#0b1220;padding:12px;display:none}
+    .panel.open{display:block}
   </style>
 </head>
 <body>
@@ -29,6 +32,7 @@
       <button class="tab" data-key="combo" onclick="switchTab('combo', this)">政策组合框架</button>
     </div>
     <div id="policyGrid" class="grid"></div>
+    <div id="detailPanel" class="panel"></div>
   </section>
 
   <section class="card">
@@ -39,18 +43,41 @@
 </main>
 <script>
 let catalog = null;
+let currentKey = 'fiscal';
+
+function openDetail(r){
+  const p = document.getElementById('detailPanel');
+  p.classList.add('open');
+  p.innerHTML = `
+    <h3>📌 ${r.name || ''}</h3>
+    <p><strong>定义：</strong>${r.desc || '-'}</p>
+    <p><strong>传导机制：</strong>${r.mechanism || '-'}</p>
+    <p><strong>市场影响：</strong>${r.impact || '-'}</p>
+    <p><strong>观察指标：</strong>${(r.signals||[]).join('｜') || '-'}</p>
+  `;
+}
 
 function renderList(key){
+  currentKey = key;
   const rows = (catalog && catalog[key]) || [];
   const box = document.getElementById('policyGrid');
+  const panel = document.getElementById('detailPanel');
+  panel.classList.remove('open');
+  panel.innerHTML = '';
   if(!rows.length){ box.innerHTML = '<p class="muted">暂无数据</p>'; return; }
-  box.innerHTML = rows.map(r => `
+  box.innerHTML = rows.map((r,i) => `
     <div class="item">
       <h3>${r.name || ''}</h3>
       <p>${r.desc || ''}</p>
       ${(r.signals||[]).length ? `<p class="muted">观察指标：${r.signals.join('｜')}</p>` : ''}
+      <button class="more" data-idx='${i}'>点开看详情</button>
     </div>
   `).join('');
+
+  // 避免内联 JSON 转义复杂，统一绑定点击
+  box.querySelectorAll('button.more').forEach((btn, idx) => {
+    btn.onclick = () => openDetail(rows[idx] || {});
+  });
 }
 
 function switchTab(key, el){
