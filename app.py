@@ -1370,9 +1370,9 @@ def _policy_latest_notices() -> dict:
     if psl.get("title") == "暂无匹配公告":
         psl = fallback_by_source("人民银行")
 
-    fiscal = pick("财政")
+    fiscal = fallback_by_source("财政部")
     if fiscal.get("title") == "暂无匹配公告":
-        fiscal = fallback_by_source("财政部")
+        fiscal = pick("财政")
 
     bond = pick("国债")
     if bond.get("title") == "暂无匹配公告":
@@ -1408,9 +1408,9 @@ def _policy_catalog() -> dict:
                 "mechanism": "政府扩大支出或减税，直接拉动总需求。",
                 "impact": "基建链、消费修复、地方财政相关行业更敏感。",
                 "table": [
-                    {"metric": "预算赤字率目标", "latest": "见年度预算报告", "freq": "年", "source": "财政部"},
-                    {"metric": "一般公共预算支出增速", "latest": "见月度财政收支数据", "freq": "月", "source": "财政部"},
-                    {"metric": "赤字资金使用进度", "latest": "见预算执行报告", "freq": "季", "source": "财政部"}
+                    {"metric": "最近财政政策公告", "latest": notices.get("fiscal",{}).get("title") or "暂无", "freq": "滚动", "source": notices.get("fiscal",{}).get("url") or "财政部"},
+                    {"metric": "公告日期", "latest": notices.get("fiscal",{}).get("date") or "暂无", "freq": "滚动", "source": notices.get("fiscal",{}).get("source") or "财政部"},
+                    {"metric": "公告关键数字", "latest": notices.get("fiscal",{}).get("fig") or "暂无", "freq": "滚动", "source": notices.get("fiscal",{}).get("url") or "财政部"}
                 ],
             },
             {

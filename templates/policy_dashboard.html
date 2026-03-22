@@ -6,18 +6,23 @@
   <link rel="stylesheet" href="/static/style.css" />
   <link rel="stylesheet" href="/static/dark.css" />
   <style>
-    .tabs{display:flex;gap:8px;flex-wrap:wrap;margin:10px 0}
+    .tabs{display:flex;gap:8px;flex-wrap:wrap;margin:10px 0 14px}
     .tab{padding:8px 12px;border:1px solid #334155;border-radius:10px;cursor:pointer;background:#0f172a;color:#e2e8f0}
     .tab.active{background:#1d4ed8;border-color:#1d4ed8}
-    .grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:12px}
-    .item{border:1px solid #334155;border-radius:12px;padding:12px;background:#0b1220}
+    .grid{display:grid;grid-template-columns:1fr;gap:14px}
+    .item{border:1px solid #334155;border-radius:14px;padding:14px;background:#0b1220}
+    .head{display:flex;justify-content:space-between;gap:10px;align-items:flex-start;flex-wrap:wrap}
+    .title{margin:0;font-size:17px}
     .muted{color:#94a3b8}
+    .kpis{display:flex;gap:8px;flex-wrap:wrap;margin-top:6px}
+    .kpi{background:#111827;border:1px solid #334155;border-radius:999px;padding:4px 10px;font-size:12px;color:#cbd5e1}
     .news{display:grid;gap:8px}
     .news a{color:#93c5fd;text-decoration:none}
     .news a:hover{text-decoration:underline}
-    table{width:100%;border-collapse:collapse;margin-top:8px;font-size:13px}
-    th,td{border:1px solid #334155;padding:6px 8px;text-align:left}
-    th{background:#111827}
+    table{width:100%;border-collapse:collapse;margin-top:10px;font-size:13px}
+    th,td{border-bottom:1px solid #243244;padding:7px 8px;text-align:left;vertical-align:top}
+    th{color:#93c5fd;font-weight:600}
+    .src a{color:#93c5fd}
   </style>
 </head>
 <body>
@@ -49,22 +54,46 @@ function defaultRowsFromSignals(signals, key){
   return (signals||[]).map(s => ({ metric: s, latest: '最新值请见右侧政策新闻与官方公告', freq, source: src }));
 }
 
+function summaryChips(tableRows){
+  const pick = (keys) => {
+    const row = tableRows.find(x => keys.some(k => (x.metric||'').includes(k)) && (x.latest||'') && (x.latest||'')!=='暂无' && (x.latest||'')!=='抓取失败');
+    return row ? row.latest : '';
+  };
+  const date = pick(['实施日期','公告日期','日期']);
+  const rate = pick(['利率','LPR']);
+  const amt  = pick(['操作量','规模','额度','金额','亿元']);
+  const arr = [];
+  if(date) arr.push(`时间：${date}`);
+  if(rate) arr.push(`利率：${rate}`);
+  if(amt) arr.push(`规模：${amt}`);
+  return arr;
+}
+
+function sourceCell(src){
+  if(!src) return '-';
+  if(/^https?:\/\//.test(src)) return `<span class="src"><a href="${src}" target="_blank" rel="noopener">查看来源</a></span>`;
+  return src;
+}
+
 function renderList(key){
   const rows = (catalog && catalog[key]) || [];
   const box = document.getElementById('policyGrid');
   if(!rows.length){ box.innerHTML = '<p class="muted">暂无数据</p>'; return; }
   box.innerHTML = rows.map((r) => {
     const tableRows = (r.table && r.table.length) ? r.table : defaultRowsFromSignals(r.signals, key);
+    const chips = summaryChips(tableRows);
     return `
       <div class="item">
-        <h3>${r.name || ''}</h3>
+        <div class="head">
+          <h3 class="title">${r.name || ''}</h3>
+          <div class="kpis">${chips.map(c=>`<span class="kpi">${c}</span>`).join('')}</div>
+        </div>
         <p><strong>定义：</strong>${r.desc || '-'}</p>
-        <p><strong>传导：</strong>${r.mechanism || '-'}</p>
-        <p><strong>影响：</strong>${r.impact || '-'}</p>
+        <p class="muted">传导：${r.mechanism || '-'} ｜ 影响：${r.impact || '-'}</p>
         <table>
-          <thead><tr><th>指标</th><th>最新口径</th><th>频率</th><th>来源</th></tr></thead>
+          <thead><tr><th style="width:22%">指标</th><th>具体数据</th><th style="width:12%">频率</th><th style="width:16%">来源</th></tr></thead>
           <tbody>
-            ${tableRows.map(x=>`<tr><td>${x.metric||'-'}</td><td>${x.latest||'-'}</td><td>${x.freq||'-'}</td><td>${x.source||'-'}</td></tr>`).join('')}
+            ${tableRows.map(x=>`<tr><td>${x.metric||'-'}</td><td>${x.latest||'-'}</td><td>${x.freq||'-'}</td><td>${sourceCell(x.source||'')}</td></tr>`).join('')}
           </tbody>
         </table>
       </div>
