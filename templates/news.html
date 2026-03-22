@@ -75,7 +75,24 @@ const aliasToKey = {
 
 let currentRegion='china';
 let currentSort='heat';
-const chart=echarts.init(document.getElementById('worldMap'));
+const mapEl = document.getElementById('worldMap');
+const chart=echarts.init(mapEl);
+
+function showMapError(msg){
+  mapEl.innerHTML = `<div style="height:100%;display:flex;align-items:center;justify-content:center;color:#94a3b8">${msg}</div>`;
+}
+
+async function ensureWorldMap(){
+  if (echarts.getMap && echarts.getMap('world')) return true;
+  try{
+    const res = await fetch('https://fastly.jsdelivr.net/npm/echarts@5/map/json/world.json');
+    const geo = await res.json();
+    echarts.registerMap('world', geo);
+    return true;
+  }catch(e){
+    return false;
+  }
+}
 
 function pulseData(region,count){
   const c = countries[region]?.coord || [116.4,39.9];
@@ -85,7 +102,10 @@ function pulseData(region,count){
   return pts;
 }
 
-function renderMap(region='china',count=10){
+async function renderMap(region='china',count=10){
+  const ok = await ensureWorldMap();
+  if(!ok){ showMapError('地图底图加载失败，请刷新重试'); return; }
+  chart.clear();
   chart.setOption({
     backgroundColor:'transparent',
     geo:{
