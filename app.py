@@ -1324,20 +1324,39 @@ def _policy_live_metrics() -> dict:
 def _policy_latest_notices() -> dict:
     news = (_policy_news().get("items") or [])[:30]
 
+    def parse_brief(url: str) -> dict:
+        if not url:
+            return {"date": "", "fig": ""}
+        try:
+            r = requests.get(url, timeout=8, headers={"User-Agent": "Mozilla/5.0"})
+            r.encoding = r.apparent_encoding or "utf-8"
+            txt = _extract_text(r.text)
+            date = (re.findall(r"(\d{4}年\d{1,2}月\d{1,2}日)", txt) or [""])[0]
+            nums = []
+            nums += re.findall(r"\d+\.?\d*%", txt)[:2]
+            nums += re.findall(r"\d+\s*亿元", txt)[:2]
+            nums += re.findall(r"\d+\s*bp", txt, flags=re.I)[:1]
+            nums = [n.replace(" ", "") for n in nums if n]
+            fig = "、".join(dict.fromkeys(nums))
+            return {"date": date, "fig": fig}
+        except Exception:
+            return {"date": "", "fig": ""}
+
     def pick(*keywords):
         for it in news:
             t = it.get("title") or ""
             if all(k in t for k in keywords):
-                return {"title": t, "url": it.get("url", ""), "source": it.get("source", "")}
-        return {"title": "暂无匹配公告", "url": "", "source": ""}
+                b = parse_brief(it.get("url", ""))
+                return {"title": t, "url": it.get("url", ""), "source": it.get("source", ""), "date": b.get("date", ""), "fig": b.get("fig", "")}
+        return {"title": "暂无匹配公告", "url": "", "source": "", "date": "", "fig": ""}
 
     return {
-        "rrr": pick("准备金") if news else {"title": "暂无匹配公告", "url": "", "source": ""},
-        "reloan": pick("再贷款") if news else {"title": "暂无匹配公告", "url": "", "source": ""},
-        "psl": pick("结构", "工具") if news else {"title": "暂无匹配公告", "url": "", "source": ""},
-        "fiscal": pick("财政") if news else {"title": "暂无匹配公告", "url": "", "source": ""},
-        "bond": pick("国债") if news else {"title": "暂无匹配公告", "url": "", "source": ""},
-        "tax": pick("税") if news else {"title": "暂无匹配公告", "url": "", "source": ""},
+        "rrr": pick("准备金") if news else {"title": "暂无匹配公告", "url": "", "source": "", "date": "", "fig": ""},
+        "reloan": pick("再贷款") if news else {"title": "暂无匹配公告", "url": "", "source": "", "date": "", "fig": ""},
+        "psl": pick("结构", "工具") if news else {"title": "暂无匹配公告", "url": "", "source": "", "date": "", "fig": ""},
+        "fiscal": pick("财政") if news else {"title": "暂无匹配公告", "url": "", "source": "", "date": "", "fig": ""},
+        "bond": pick("国债") if news else {"title": "暂无匹配公告", "url": "", "source": "", "date": "", "fig": ""},
+        "tax": pick("税") if news else {"title": "暂无匹配公告", "url": "", "source": "", "date": "", "fig": ""},
     }
 
 
@@ -1370,6 +1389,8 @@ def _policy_catalog() -> dict:
                 "impact": "建筑建材、工程机械、区域基建链受益更直接。",
                 "table": [
                     {"metric": "最近专项债相关公告", "latest": notices.get("fiscal",{}).get("title") or "暂无", "freq": "滚动", "source": notices.get("fiscal",{}).get("url") or "官方渠道"},
+                    {"metric": "公告日期", "latest": notices.get("fiscal",{}).get("date") or "暂无", "freq": "滚动", "source": notices.get("fiscal",{}).get("source") or "官方渠道"},
+                    {"metric": "公告关键数字", "latest": notices.get("fiscal",{}).get("fig") or "暂无", "freq": "滚动", "source": notices.get("fiscal",{}).get("url") or "官方渠道"},
                 ],
             },
             {
@@ -1380,6 +1401,8 @@ def _policy_catalog() -> dict:
                 "impact": "高端制造、能源安全、科技创新相关方向受关注。",
                 "table": [
                     {"metric": "最近国债相关公告", "latest": notices.get("bond",{}).get("title") or "暂无", "freq": "滚动", "source": notices.get("bond",{}).get("url") or "官方渠道"},
+                    {"metric": "公告日期", "latest": notices.get("bond",{}).get("date") or "暂无", "freq": "滚动", "source": notices.get("bond",{}).get("source") or "官方渠道"},
+                    {"metric": "公告关键数字", "latest": notices.get("bond",{}).get("fig") or "暂无", "freq": "滚动", "source": notices.get("bond",{}).get("url") or "官方渠道"},
                 ],
             },
             {
@@ -1390,6 +1413,8 @@ def _policy_catalog() -> dict:
                 "impact": "中小企业、制造业、可选消费修复弹性较大。",
                 "table": [
                     {"metric": "最近税费政策公告", "latest": notices.get("tax",{}).get("title") or "暂无", "freq": "滚动", "source": notices.get("tax",{}).get("url") or "官方渠道"},
+                    {"metric": "公告日期", "latest": notices.get("tax",{}).get("date") or "暂无", "freq": "滚动", "source": notices.get("tax",{}).get("source") or "官方渠道"},
+                    {"metric": "公告关键数字", "latest": notices.get("tax",{}).get("fig") or "暂无", "freq": "滚动", "source": notices.get("tax",{}).get("url") or "官方渠道"},
                 ],
             },
             {
@@ -1400,6 +1425,8 @@ def _policy_catalog() -> dict:
                 "impact": "区域经济稳定性提升，民生链条需求更稳。",
                 "table": [
                     {"metric": "最近财政/转移支付公告", "latest": notices.get("fiscal",{}).get("title") or "暂无", "freq": "滚动", "source": notices.get("fiscal",{}).get("url") or "官方渠道"},
+                    {"metric": "公告日期", "latest": notices.get("fiscal",{}).get("date") or "暂无", "freq": "滚动", "source": notices.get("fiscal",{}).get("source") or "官方渠道"},
+                    {"metric": "公告关键数字", "latest": notices.get("fiscal",{}).get("fig") or "暂无", "freq": "滚动", "source": notices.get("fiscal",{}).get("url") or "官方渠道"},
                 ],
             },
         ],
@@ -1412,6 +1439,8 @@ def _policy_catalog() -> dict:
                 "impact": "银行、地产链与高股息资产估值中枢通常受影响。",
                 "table": [
                     {"metric": "最近准备金政策公告", "latest": notices.get("rrr",{}).get("title") or "暂无", "freq": "滚动", "source": notices.get("rrr",{}).get("url") or "人民银行"},
+                    {"metric": "公告日期", "latest": notices.get("rrr",{}).get("date") or "暂无", "freq": "滚动", "source": notices.get("rrr",{}).get("source") or "人民银行"},
+                    {"metric": "公告关键数字", "latest": notices.get("rrr",{}).get("fig") or "暂无", "freq": "滚动", "source": notices.get("rrr",{}).get("url") or "人民银行"},
                 ],
             },
             {
@@ -1458,6 +1487,8 @@ def _policy_catalog() -> dict:
                 "impact": "科创、小微产业链与绿色投资方向受益明显。",
                 "table": [
                     {"metric": "最近再贷款相关公告", "latest": notices.get("reloan",{}).get("title") or "暂无", "freq": "滚动", "source": notices.get("reloan",{}).get("url") or "人民银行"},
+                    {"metric": "公告日期", "latest": notices.get("reloan",{}).get("date") or "暂无", "freq": "滚动", "source": notices.get("reloan",{}).get("source") or "人民银行"},
+                    {"metric": "公告关键数字", "latest": notices.get("reloan",{}).get("fig") or "暂无", "freq": "滚动", "source": notices.get("reloan",{}).get("url") or "人民银行"},
                 ],
             },
             {
@@ -1468,6 +1499,8 @@ def _policy_catalog() -> dict:
                 "impact": "保障房、城中村改造、公共设施链条受影响。",
                 "table": [
                     {"metric": "最近结构性工具公告", "latest": notices.get("psl",{}).get("title") or "暂无", "freq": "滚动", "source": notices.get("psl",{}).get("url") or "人民银行"},
+                    {"metric": "公告日期", "latest": notices.get("psl",{}).get("date") or "暂无", "freq": "滚动", "source": notices.get("psl",{}).get("source") or "人民银行"},
+                    {"metric": "公告关键数字", "latest": notices.get("psl",{}).get("fig") or "暂无", "freq": "滚动", "source": notices.get("psl",{}).get("url") or "人民银行"},
                 ],
             },
         ],
