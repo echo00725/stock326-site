@@ -12,8 +12,10 @@
     .top{display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap}
     .layout{display:grid;grid-template-columns:46% 54%;gap:14px;margin-top:12px}
     .panel{border:1px solid #334155;border-radius:14px;background:#0b1220;padding:12px}
-    #worldWrap{display:flex;justify-content:center;align-items:center;padding:8px 0}
-    #worldMap{width:min(640px,92vw);height:min(640px,92vw);border-radius:50%;overflow:hidden;background:radial-gradient(circle at 30% 30%,#173458 0%,#0b1b2f 45%,#020617 80%);box-shadow:inset -30px -30px 80px rgba(0,0,0,.45), 0 0 40px rgba(59,130,246,.2)}
+    #worldWrap{position:relative;display:flex;justify-content:center;align-items:center;padding:8px 0}
+    #worldWrap::before{content:'';position:absolute;width:min(640px,92vw);height:min(640px,92vw);border-radius:50%;background:radial-gradient(circle at 35% 30%,rgba(255,255,255,.16),rgba(255,255,255,0) 38%);pointer-events:none;z-index:3}
+    #worldWrap::after{content:'';position:absolute;width:min(640px,92vw);height:min(640px,92vw);border-radius:50%;box-shadow:inset -45px -55px 90px rgba(0,0,0,.55), inset 25px 20px 45px rgba(255,255,255,.06), 0 0 42px rgba(59,130,246,.22);pointer-events:none;z-index:3}
+    #worldMap{width:min(640px,92vw);height:min(640px,92vw);border-radius:50%;overflow:hidden;background:radial-gradient(circle at 30% 30%,#173458 0%,#0b1b2f 45%,#020617 80%);transform:perspective(1000px) rotateX(16deg) scale(1.02);transform-origin:center 58%;}
     .toolbar{display:flex;gap:8px;flex-wrap:wrap;margin:8px 0}
     .chip,.sort{padding:6px 10px;border:1px solid #334155;border-radius:999px;background:#111827;color:#e2e8f0;cursor:pointer;font-size:12px}
     .chip.active,.sort.active{background:#1d4ed8;border-color:#1d4ed8}
@@ -121,9 +123,9 @@ async function renderMap(region='china',count=10){
   chart.setOption({
     backgroundColor:'transparent',
     geo:{
-      map:'world', roam:true, zoom:1.1,
-      itemStyle:{areaColor:'#0f172a',borderColor:'#334155'},
-      emphasis:{itemStyle:{areaColor:'#1d4ed8'}},
+      map:'world', roam:true, zoom:1.2, layoutCenter:['50%','53%'], layoutSize:'102%',
+      itemStyle:{areaColor:'#13253f',borderColor:'#35506b',borderWidth:0.8},
+      emphasis:{itemStyle:{areaColor:'#2563eb'}},
       label:{show:false}
     },
     visualMap:{show:false,min:0,max:100,inRange:{color:['#0ea5e9','#22d3ee','#f59e0b']}},
