@@ -7,12 +7,12 @@
   <link rel="stylesheet" href="/static/style.css"/>
   <link rel="stylesheet" href="/static/dark.css"/>
   <script src="https://cdn.jsdelivr.net/npm/echarts@5/dist/echarts.min.js"></script>
-  <script src="https://cdn.jsdelivr.net/npm/echarts-gl@2/dist/echarts-gl.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/echarts@5/map/js/world.js"></script>
   <style>
     .top{display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap}
     .layout{display:grid;grid-template-columns:46% 54%;gap:14px;margin-top:12px}
     .panel{border:1px solid #334155;border-radius:14px;background:#0b1220;padding:12px}
-    #globe{height:720px;border-radius:12px;overflow:hidden;background:radial-gradient(ellipse at center,#0b1b2f 0%,#020617 75%)}
+    #worldMap{height:720px;border-radius:12px;overflow:hidden;background:radial-gradient(ellipse at center,#0b1b2f 0%,#020617 75%)}
     .toolbar{display:flex;gap:8px;flex-wrap:wrap;margin:8px 0}
     .chip,.sort{padding:6px 10px;border:1px solid #334155;border-radius:999px;background:#111827;color:#e2e8f0;cursor:pointer;font-size:12px}
     .chip.active,.sort.active{background:#1d4ed8;border-color:#1d4ed8}
@@ -22,7 +22,7 @@
     .news-item a{color:#93c5fd;text-decoration:none;font-weight:600}
     .meta{color:#94a3b8;font-size:12px;margin-top:4px}
     .badge{display:inline-block;padding:2px 8px;border:1px solid #334155;border-radius:999px;margin-right:6px;font-size:12px}
-    @media (max-width: 1000px){.layout{grid-template-columns:1fr}#globe{height:420px}}
+    @media (max-width: 1000px){.layout{grid-template-columns:1fr}#worldMap{height:420px}}
   </style>
 </head>
 <body>
@@ -31,11 +31,11 @@
     <h1>🌍 全球新闻雷达 Pro</h1>
     <a class="btn secondary" href="/">← 返回功能目录</a>
   </div>
-  <p class="sub">覆盖主要国家，支持地球交互、热度脉冲、按时间/热度/影响排序。</p>
+  <p class="sub">直接点击地图上国家区域即可加载该国家新闻（不需要点黄色点）。</p>
 
   <div class="layout">
     <section class="panel">
-      <div id="globe"></div>
+      <div id="worldMap"></div>
       <select id="countrySelect" class="country-select"></select>
       <div class="toolbar" id="quickRegions"></div>
     </section>
@@ -69,68 +69,61 @@ const aliasToKey = {
   'China':'china','United States':'us','United States of America':'us','Japan':'japan','India':'india','Russia':'russia',
   'Brazil':'brazil','Canada':'canada','Australia':'australia','South Korea':'korea','Singapore':'singapore','United Kingdom':'uk',
   'Germany':'germany','France':'france','Italy':'italy','Spain':'spain','Mexico':'mexico','Indonesia':'indonesia',
-  'Turkey':'turkiye','Saudi Arabia':'saudi','United Arab Emirates':'uae','Iran':'middleeast','Israel':'middleeast','Iraq':'middleeast',
-  'Syria':'middleeast','Qatar':'middleeast','Kuwait':'middleeast','Oman':'middleeast','Jordan':'middleeast','Egypt':'middleeast'
+  'Turkey':'turkiye','Türkiye':'turkiye','Saudi Arabia':'saudi','United Arab Emirates':'uae',
+  'Iran':'middleeast','Israel':'middleeast','Iraq':'middleeast','Syria':'middleeast','Qatar':'middleeast','Kuwait':'middleeast','Oman':'middleeast','Jordan':'middleeast','Egypt':'middleeast'
 };
 
 let currentRegion='china';
 let currentSort='heat';
-const chart=echarts.init(document.getElementById('globe'));
+const chart=echarts.init(document.getElementById('worldMap'));
 
-function glowSeries(region, count){
+function pulseData(region,count){
   const c = countries[region]?.coord || [116.4,39.9];
-  const n = Math.max(6, Math.min(18, count));
+  const n = Math.max(5, Math.min(16, count));
   const pts=[];
-  for(let i=0;i<n;i++){
-    pts.push({value:[c[0]+(Math.random()-0.5)*8, c[1]+(Math.random()-0.5)*6, 2]});
-  }
-  return [{
-    type:'scatter3D', coordinateSystem:'globe', symbolSize: 8,
-    itemStyle:{color:'#60a5fa',opacity:0.9}, blendMode:'lighter', data:pts
-  }];
+  for(let i=0;i<n;i++) pts.push({value:[c[0]+(Math.random()-0.5)*5, c[1]+(Math.random()-0.5)*4, (count||1)]});
+  return pts;
 }
 
-function renderGlobe(region='china',count=10){
-  const center = countries[region]?.coord || [116.4,39.9];
+function renderMap(region='china',count=10){
   chart.setOption({
     backgroundColor:'transparent',
-    globe:{
-      baseTexture:'https://fastly.jsdelivr.net/gh/apache/echarts-website@asf-site/examples/data-gl/asset/world.topo.bathy.200401.jpg',
-      heightTexture:'https://fastly.jsdelivr.net/gh/apache/echarts-website@asf-site/examples/data-gl/asset/bathymetry_bw_composite_4k.jpg',
-      shading:'realistic',
-      realisticMaterial:{roughness:0.8,metalness:0},
-      postEffect:{enable:true,bloom:{enable:true,bloomIntensity:0.15}},
-      light:{main:{intensity:1.2,shadow:true},ambient:{intensity:0.35}},
-      viewControl:{autoRotate:true,autoRotateSpeed:6,targetCoord:center,distance:165},
-      atmosphere:{show:true,outerGlow:{enable:true,color:'#3b82f6',intensity:0.18}}
-    },
-    series:[...glowSeries(region,count),{
-      type:'scatter3D', coordinateSystem:'globe', symbolSize:11,
-      itemStyle:{color:'#f59e0b'},
-      data:Object.entries(countries).map(([k,v])=>({name:v.name,value:[v.coord[0],v.coord[1],2],region:k})),
+    geo:{
+      map:'world', roam:true, zoom:1.1,
+      itemStyle:{areaColor:'#0f172a',borderColor:'#334155'},
+      emphasis:{itemStyle:{areaColor:'#1d4ed8'}},
       label:{show:false}
-    }]
+    },
+    visualMap:{show:false,min:0,max:100,inRange:{color:['#0ea5e9','#22d3ee','#f59e0b']}},
+    series:[
+      {
+        type:'effectScatter', coordinateSystem:'geo', zlevel:2,
+        symbolSize:(val)=> Math.max(8, Math.min(20, (val[2]||10))),
+        rippleEffect:{brushType:'stroke',scale:3,period:4},
+        itemStyle:{color:'#60a5fa',shadowBlur:18,shadowColor:'#60a5fa'},
+        data:pulseData(region,count)
+      }
+    ]
   },true);
 
   chart.off('click');
   chart.on('click',(p)=>{
-    if(p?.data?.region) selectRegion(p.data.region);
-    else if(aliasToKey[p.name]) selectRegion(aliasToKey[p.name]);
+    if(!p || !p.name) return;
+    const mapped = aliasToKey[p.name] || p.name.toLowerCase();
+    selectRegion(mapped, p.name);
   });
 }
 
 function mountSelectors(){
   const select=document.getElementById('countrySelect');
   select.innerHTML=Object.entries(countries).map(([k,v])=>`<option value="${k}">${v.name}</option>`).join('');
-  select.value=currentRegion;
+  if(countries[currentRegion]) select.value=currentRegion;
   select.onchange=()=>selectRegion(select.value);
 
   const quick=document.getElementById('quickRegions');
   const hot=['china','us','europe','japan','india','middleeast','uk','germany'];
   quick.innerHTML=hot.map(k=>`<button class="chip ${k===currentRegion?'active':''}" data-r="${k}">${countries[k].name}</button>`).join('');
-  quick.onclick=(e)=>{
-    const b=e.target.closest('.chip'); if(!b) return; selectRegion(b.dataset.r);
-  };
+  quick.onclick=(e)=>{ const b=e.target.closest('.chip'); if(!b) return; selectRegion(b.dataset.r); };
 }
 
 function setSort(sort){
@@ -139,8 +132,8 @@ function setSort(sort){
   loadRegionNews(currentRegion);
 }
 
-function renderNews(data){
-  document.getElementById('regionTitle').textContent=`地区：${data.region_name || currentRegion}`;
+function renderNews(data, displayName=''){
+  document.getElementById('regionTitle').textContent=`地区：${displayName || data.region_name || currentRegion}`;
   document.getElementById('updatedAt').textContent=`更新时间：${data.updated_at || '-'}`;
   const items=data.items||[];
   document.getElementById('newsList').innerHTML=items.length?items.map(i=>`
@@ -154,19 +147,19 @@ function renderNews(data){
       <div class="meta">${i.abstract||''}</div>
     </div>
   `).join(''):'<div class="meta">暂无该地区新闻。</div>';
-  renderGlobe(currentRegion, items.length);
+  renderMap(currentRegion, items.length);
 }
 
-async function loadRegionNews(region){
+async function loadRegionNews(region, displayName=''){
   const res=await fetch(`/api/news/geo?region=${encodeURIComponent(region)}&limit=28&sort=${encodeURIComponent(currentSort)}`);
   const data=await res.json();
-  renderNews(data);
+  renderNews(data, displayName);
 }
 
-function selectRegion(region){
+function selectRegion(region, displayName=''){
   currentRegion=region;
   mountSelectors();
-  loadRegionNews(region);
+  loadRegionNews(region, displayName);
 }
 
 document.getElementById('sortBar').onclick=(e)=>{
@@ -174,7 +167,7 @@ document.getElementById('sortBar').onclick=(e)=>{
 };
 
 mountSelectors();
-renderGlobe(currentRegion,10);
+renderMap(currentRegion,10);
 loadRegionNews(currentRegion);
 </script>
 </body>
