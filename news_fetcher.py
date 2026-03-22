@@ -308,11 +308,12 @@ def fetch_region_news(region: str = "china", limit: int = 20, sort_by: str = "he
             continue
         seen.add(k)
         rows.append(it)
-        if len(rows) >= max(8, limit):
+        if len(rows) >= limit:
             break
 
-    # 再用全球源补齐
-    for feed in fallback_feeds:
+    # 主源不足时才用全球源补齐，避免“点国家但新闻几乎不变”
+    if len(rows) < max(4, limit // 2):
+      for feed in fallback_feeds:
         try:
             d = feedparser.parse(feed)
             items = _recent(d.entries, translate_titles=True, max_translate=8)
