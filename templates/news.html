@@ -13,9 +13,11 @@
     .layout{display:grid;grid-template-columns:46% 54%;gap:14px;margin-top:12px}
     .panel{border:1px solid #334155;border-radius:14px;background:#0b1220;padding:12px}
     #worldWrap{position:relative;display:flex;justify-content:center;align-items:center;padding:8px 0}
-    #worldWrap::before{content:'';position:absolute;width:min(640px,92vw);height:min(640px,92vw);border-radius:50%;background:radial-gradient(circle at 35% 30%,rgba(255,255,255,.16),rgba(255,255,255,0) 38%);pointer-events:none;z-index:3}
-    #worldWrap::after{content:'';position:absolute;width:min(640px,92vw);height:min(640px,92vw);border-radius:50%;box-shadow:inset -45px -55px 90px rgba(0,0,0,.55), inset 25px 20px 45px rgba(255,255,255,.06), 0 0 42px rgba(59,130,246,.22);pointer-events:none;z-index:3}
-    #worldMap{width:min(640px,92vw);height:min(640px,92vw);border-radius:50%;overflow:hidden;background:radial-gradient(circle at 30% 30%,#173458 0%,#0b1b2f 45%,#020617 80%);transform:perspective(1000px) rotateX(16deg) scale(1.02);transform-origin:center 58%;}
+    #worldWrap::before{content:'';position:absolute;width:min(640px,92vw);height:min(640px,92vw);border-radius:50%;background:radial-gradient(circle at 35% 30%,rgba(255,255,255,.10),rgba(255,255,255,0) 42%);pointer-events:none;z-index:2}
+    #worldWrap::after{content:'';position:absolute;width:min(640px,92vw);height:min(640px,92vw);border-radius:50%;box-shadow:inset -18px -22px 36px rgba(0,0,0,.30), inset 10px 8px 18px rgba(255,255,255,.05), 0 0 28px rgba(59,130,246,.16);pointer-events:none;z-index:2}
+    #worldMap{width:min(640px,92vw);height:min(640px,92vw);border-radius:50%;overflow:hidden;background:radial-gradient(circle at 30% 30%,#173458 0%,#0b1b2f 45%,#020617 80%);transform:perspective(1000px) rotateX(10deg) scale(1.01);transform-origin:center 58%;}
+    .zoom-tools{position:absolute;right:14px;top:14px;display:grid;gap:6px;z-index:4}
+    .zbtn{width:32px;height:32px;border-radius:8px;border:1px solid #334155;background:#0f172a;color:#e2e8f0;cursor:pointer}
     .toolbar{display:flex;gap:8px;flex-wrap:wrap;margin:8px 0}
     .chip,.sort{padding:6px 10px;border:1px solid #334155;border-radius:999px;background:#111827;color:#e2e8f0;cursor:pointer;font-size:12px}
     .chip.active,.sort.active{background:#1d4ed8;border-color:#1d4ed8}
@@ -38,7 +40,7 @@
 
   <div class="layout">
     <section class="panel">
-      <div id="worldWrap"><div id="worldMap"></div></div>
+      <div id="worldWrap"><div id="worldMap"></div><div class="zoom-tools"><button class="zbtn" id="zoomIn">＋</button><button class="zbtn" id="zoomOut">－</button><button class="zbtn" id="zoomReset">⟲</button></div></div>
       <select id="countrySelect" class="country-select"></select>
       <div class="toolbar" id="quickRegions"></div>
     </section>
@@ -123,9 +125,9 @@ async function renderMap(region='china',count=10){
   chart.setOption({
     backgroundColor:'transparent',
     geo:{
-      map:'world', roam:true, zoom:1.2, layoutCenter:['50%','53%'], layoutSize:'102%',
-      itemStyle:{areaColor:'#13253f',borderColor:'#35506b',borderWidth:0.8},
-      emphasis:{itemStyle:{areaColor:'#2563eb'}},
+      map:'world', roam:true, zoom:1.25, layoutCenter:['50%','53%'], layoutSize:'102%',
+      itemStyle:{areaColor:'#1a3557',borderColor:'#6ea8ff',borderWidth:0.9},
+      emphasis:{itemStyle:{areaColor:'#3b82f6'}},
       label:{show:false}
     },
     visualMap:{show:false,min:0,max:100,inRange:{color:['#0ea5e9','#22d3ee','#f59e0b']}},
@@ -199,6 +201,10 @@ function selectRegion(region, displayName=''){
 document.getElementById('sortBar').onclick=(e)=>{
   const b=e.target.closest('.sort'); if(!b) return; setSort(b.dataset.sort);
 };
+
+document.getElementById('zoomIn').onclick=()=>chart.dispatchAction({type:'geoRoam',componentType:'geo',zoom:1.2});
+document.getElementById('zoomOut').onclick=()=>chart.dispatchAction({type:'geoRoam',componentType:'geo',zoom:0.84});
+document.getElementById('zoomReset').onclick=()=>renderMap(currentRegion,10);
 
 mountSelectors();
 renderMap(currentRegion,10);
