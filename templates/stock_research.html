@@ -35,7 +35,19 @@
   </section>
 
   <section class="card">
-    <h2>1) 权威研报信息（近2年）</h2>
+    <h2>1) 公司主营业务深度分析（AI+多源）</h2>
+    <div id="mainbiz-summary" class="sub" style="margin-bottom:8px;"></div>
+    <ul id="biz-lines"></ul>
+    <h3 style="margin-top:10px;font-size:16px;">核心产品清单（尽量找全）</h3>
+    <div id="product-cards" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));gap:10px;"></div>
+    <h3 style="margin-top:10px;font-size:16px;">未来战略布局（含时间点）</h3>
+    <div id="strategy-list" style="display:grid;gap:8px;"></div>
+    <ul id="analysis-list" style="margin-top:10px;"></ul>
+    <div id="analysis-note" class="sub"></div>
+  </section>
+
+  <section class="card">
+    <h2>2) 权威研报信息（近2年）</h2>
     <div id="reports-meta" class="sub">待加载</div>
     <div id="reports-source" class="sub"></div>
     <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:center;margin-top:8px;">
@@ -51,18 +63,6 @@
   </section>
 
   <section class="card">
-    <h2>2) 公司主营业务深度分析（AI+多源）</h2>
-    <div id="mainbiz-summary" class="sub" style="margin-bottom:8px;"></div>
-    <ul id="biz-lines"></ul>
-    <h3 style="margin-top:10px;font-size:16px;">核心产品清单（尽量找全）</h3>
-    <div id="product-cards" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));gap:10px;"></div>
-    <h3 style="margin-top:10px;font-size:16px;">未来战略布局（含时间点）</h3>
-    <div id="strategy-list" style="display:grid;gap:8px;"></div>
-    <ul id="analysis-list" style="margin-top:10px;"></ul>
-    <div id="analysis-note" class="sub"></div>
-  </section>
-
-  <section class="card">
     <h2>3) 公司业务线思维导图（增强版）</h2>
     <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:center;margin-bottom:10px;">
       <label>布局
@@ -72,8 +72,8 @@
         </select>
       </label>
       <label>默认展开层级
-        <input id="depth" type="range" min="1" max="7" value="3" style="vertical-align:middle;" />
-        <span id="depth-val">3</span>
+        <input id="depth" type="range" min="1" max="7" value="4" style="vertical-align:middle;" />
+        <span id="depth-val">4</span>
       </label>
       <input id="node-search" placeholder="搜索节点关键词" style="min-width:220px;padding:8px;border-radius:8px;border:1px solid #ccc" />
       <button id="fit-tree" class="btn secondary">自适应视图</button>
@@ -163,9 +163,47 @@
   let reportsCache = [];
   let collapsedNodeIds = new Set();
   let activeNodeRef = null;
+  let runTicker = null;
+  let runStartAt = 0;
 
   function escapeHtml(v) {
     return String(v ?? '').replace(/[&<>"']/g, (m) => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m]));
+  }
+
+  function formatEta(seconds) {
+    const mins = Math.max(1, Math.round(seconds / 60));
+    return `${mins}分钟`;
+  }
+
+  function startRunTicker(baseEstimateSec = 210) {
+    runStartAt = Date.now();
+    if (runTicker) clearInterval(runTicker);
+    const key = 'stock-research-estimate-sec';
+    const fromStorage = Number(localStorage.getItem(key) || 0);
+    let estimateSec = fromStorage > 30 ? fromStorage : baseEstimateSec;
+
+    const tick = () => {
+      const elapsed = Math.floor((Date.now() - runStartAt) / 1000);
+      const eta = Math.max(15, estimateSec - elapsed);
+      const over = elapsed > estimateSec ? '（正在深度分析，已超过预估）' : '';
+      runStatus.textContent = `正在拉取研报与分析（${elapsed}秒，预计约${formatEta(eta)}）${over}`;
+    };
+
+    tick();
+    runTicker = setInterval(tick, 1000);
+
+    return {
+      stop(success = true) {
+        if (runTicker) clearInterval(runTicker);
+        runTicker = null;
+        const elapsed = Math.max(1, Math.floor((Date.now() - runStartAt) / 1000));
+        if (success) {
+          const next = Math.round((estimateSec * 0.6) + (elapsed * 0.4));
+          localStorage.setItem(key, String(next));
+        }
+        return elapsed;
+      }
+    };
   }
 
   function renderReportsTable() {
@@ -403,7 +441,7 @@
     if (!currentTree) return;
     nodeMenu.style.display = 'none';
     const keyword = searchInput.value.trim();
-    const depth = Number(depthRange.value || 3);
+    const depth = Number(depthRange.value || 4);
     depthVal.textContent = String(depth);
 
     const { nodes, links } = flattenTreeToGraph(currentTree, depth, keyword, collapsedNodeIds);
@@ -413,6 +451,7 @@
       window.addEventListener('resize', () => chart && chart.resize());
       chart.on('click', (params) => {
         if (params?.data?.id) showNodeMenu(params);
+        else nodeMenu.style.display = 'none';
       });
     }
 
@@ -462,7 +501,8 @@
 
     runBtn.disabled = true;
     runBtn.textContent = '生成中...';
-    runStatus.textContent = '正在拉取研报与分析...';
+    const ticker = startRunTicker(210);
+    let elapsedSec = 0;
 
     try {
       const days = Number(daysSel.value || 730);
@@ -479,7 +519,7 @@
       document.getElementById('reports-source').textContent = `研报来源：${[...new Set(reportsCache.map(x=>x.source).filter(Boolean))].join(' / ') || '暂无'}`;
       renderReportsTable();
 
-      runStatus.textContent = '数据加载完成';
+      // 状态文案在末尾统一更新（含耗时）
       const a = analysisResp.data.analysis || {};
       const companyInfo = analysisResp.data.companyInfo || {};
       document.getElementById('analysis-list').innerHTML = (a.summary || []).map(s => `<li>${s}</li>`).join('');
@@ -572,10 +612,13 @@
         ? `调用失败(${aiMeta.model || '-'})`
         : (aiMeta.used ? `已启用(${aiMeta.model || '-'})` : '未命中/未配置');
       document.getElementById('tree-stats').textContent = `节点总数 ${stats.total} ｜ 叶子节点 ${stats.leaf} ｜ 最大层级 ${stats.maxDepth} ｜ AI ${aiLabel} ｜ 审核 ${qa.pass ? '通过' : '补全中'}(摘要${qa.summary_len || 0}/业务线${qa.business_lines || 0}/产品${qa.products || 0}/战略${qa.strategy || 0}) ｜ 产品质检 ${pa.usedAI ? 'AI复审' : '规则复审'}（剔除${pa.rejectedCount || 0}）`;
+      elapsedSec = ticker.stop(true);
       if (aiMeta.failed) {
-        runStatus.textContent = `AI调用失败：${aiMeta.failureMessage || '请检查Token/配额后重试'}`;
+        runStatus.textContent = `AI调用失败：${aiMeta.failureMessage || '请检查Token/配额后重试'}（耗时${elapsedSec}秒）`;
       } else {
-        runStatus.textContent = qa.pass ? '生成完成（已通过内容审核）' : '生成完成（已做自动补全）';
+        runStatus.textContent = qa.pass
+          ? `生成完成（已通过内容审核，耗时${elapsedSec}秒）`
+          : `生成完成（已做自动补全，耗时${elapsedSec}秒）`;
       }
       drawer.style.display = 'none';
       renderTree();
@@ -586,9 +629,11 @@
         if (window.mermaid) window.mermaid.initialize({ startOnLoad: false });
       } catch (_) {}
     } catch (e) {
-      runStatus.textContent = `失败：${e.message || String(e)}`;
+      elapsedSec = ticker.stop(false);
+      runStatus.textContent = `失败：${e.message || String(e)}（已等待${elapsedSec}秒）`;
       alert(e.message || String(e));
     } finally {
+      if (runTicker) ticker.stop(false);
       runBtn.disabled = false;
       runBtn.textContent = '生成研报分析';
     }
@@ -647,7 +692,7 @@
   menuExplainBtn.addEventListener('click', explainNode);
   explainClose.addEventListener('click', () => { explainDrawer.style.display = 'none'; });
   document.addEventListener('click', (e) => {
-    if (!nodeMenu.contains(e.target) && e.target?.closest?.('#tree-chart') == null) {
+    if (!nodeMenu.contains(e.target)) {
       nodeMenu.style.display = 'none';
     }
   });
