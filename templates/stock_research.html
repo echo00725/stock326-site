@@ -692,6 +692,8 @@
   menuExplainBtn.addEventListener('click', explainNode);
   explainClose.addEventListener('click', () => { explainDrawer.style.display = 'none'; });
   document.addEventListener('click', (e) => {
+    const inChart = !!e.target?.closest?.('#tree-chart');
+    if (inChart) return; // 图内点击交给 chart.on('click') 处理（点节点显示、点空白收起）
     if (!nodeMenu.contains(e.target)) {
       nodeMenu.style.display = 'none';
     }
