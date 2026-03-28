@@ -9,6 +9,8 @@ import random
 import re
 import time
 import threading
+import secrets
+from urllib.parse import urlencode
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
@@ -20,9 +22,125 @@ from flask import Flask, jsonify, render_template, request
 app = Flask(__name__)
 app.json.ensure_ascii = False
 
+
+def _load_local_env(path: Path):
+    """轻量 .env 读取，避免引入额外依赖。仅在变量未设置时写入进程环境。"""
+    try:
+        if not path.exists():
+            return
+        for raw in path.read_text(encoding="utf-8").splitlines():
+            line = raw.strip()
+            if not line or line.startswith("#") or "=" not in line:
+                continue
+            k, v = line.split("=", 1)
+            k = k.strip()
+            v = v.strip().strip('"').strip("'")
+            if k and ((k not in os.environ) or (not str(os.environ.get(k) or '').strip())):
+                os.environ[k] = v
+    except Exception:
+        pass
+
+
+_load_local_env(Path(__file__).parent / ".env")
+
+
+def _oauth_cfg() -> dict:
+    return {
+        "client_id": (os.getenv("STOCK_RESEARCH_OPENAI_OAUTH_CLIENT_ID") or "").strip(),
+        "client_secret": (os.getenv("STOCK_RESEARCH_OPENAI_OAUTH_CLIENT_SECRET") or "").strip(),
+        "authorize_url": (os.getenv("STOCK_RESEARCH_OPENAI_OAUTH_AUTHORIZE_URL") or "https://auth.openai.com/oauth/authorize").strip(),
+        "token_url": (os.getenv("STOCK_RESEARCH_OPENAI_OAUTH_TOKEN_URL") or "https://auth.openai.com/oauth/token").strip(),
+        "redirect_uri": (os.getenv("STOCK_RESEARCH_OPENAI_OAUTH_REDIRECT_URI") or "http://127.0.0.1:8080/oauth/openai/callback").strip(),
+        "scope": (os.getenv("STOCK_RESEARCH_OPENAI_OAUTH_SCOPE") or "offline_access").strip(),
+    }
+
+
+def _load_oauth_token_obj() -> dict:
+    obj = load_json(OPENAI_OAUTH_TOKEN_FILE, {})
+    return obj if isinstance(obj, dict) else {}
+
+
+def _save_oauth_token_obj(token_obj: dict):
+    save_json(OPENAI_OAUTH_TOKEN_FILE, token_obj or {})
+
+
+def _token_expires_soon(token_obj: dict, leeway_sec: int = 120) -> bool:
+    exp = float(token_obj.get("expires_at") or 0)
+    if exp <= 0:
+        return True
+    return time.time() + leeway_sec >= exp
+
+
+def _oauth_refresh_token(token_obj: dict) -> dict | None:
+    cfg = _oauth_cfg()
+    refresh_token = (token_obj.get("refresh_token") or "").strip()
+    if not (cfg["client_id"] and cfg["client_secret"] and refresh_token):
+        return None
+
+    form = {
+        "grant_type": "refresh_token",
+        "refresh_token": refresh_token,
+        "client_id": cfg["client_id"],
+        "client_secret": cfg["client_secret"],
+    }
+    try:
+        resp = requests.post(cfg["token_url"], data=form, timeout=30)
+        resp.raise_for_status()
+        obj = resp.json() or {}
+        expires_in = int(obj.get("expires_in") or 3600)
+        merged = {
+            **token_obj,
+            **obj,
+            "expires_at": time.time() + max(60, expires_in),
+            "token_type": obj.get("token_type") or token_obj.get("token_type") or "Bearer",
+            "updated_at": dt.datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        }
+        if not merged.get("refresh_token"):
+            merged["refresh_token"] = refresh_token
+        _save_oauth_token_obj(merged)
+        if merged.get("access_token"):
+            os.environ["STOCK_RESEARCH_OPENAI_OAUTH_TOKEN"] = str(merged.get("access_token"))
+        return merged
+    except Exception:
+        return None
+
+
+def _get_openai_access_token() -> str:
+    # 一次性后端配置优先：API Key 方式（前端无感）
+    # 优先：千问兼容口径（DashScope）
+    qwen_key = (os.getenv("STOCK_RESEARCH_QWEN_API_KEY") or os.getenv("DASHSCOPE_API_KEY") or "").strip()
+    if qwen_key:
+        return qwen_key
+
+    # 其次：OpenAI
+    api_key = (os.getenv("STOCK_RESEARCH_OPENAI_API_KEY") or os.getenv("OPENAI_API_KEY") or "").strip()
+    if api_key:
+        return api_key
+
+    # 兼容旧 OAuth token 方式
+    env_token = (os.getenv("STOCK_RESEARCH_OPENAI_OAUTH_TOKEN") or os.getenv("OPENAI_OAUTH_ACCESS_TOKEN") or "").strip()
+    if env_token:
+        return env_token
+
+    token_obj = _load_oauth_token_obj()
+    if not token_obj:
+        return ""
+
+    if _token_expires_soon(token_obj):
+        refreshed = _oauth_refresh_token(token_obj)
+        if refreshed and refreshed.get("access_token"):
+            return str(refreshed.get("access_token"))
+
+    t = (token_obj.get("access_token") or "").strip()
+    if t:
+        os.environ["STOCK_RESEARCH_OPENAI_OAUTH_TOKEN"] = t
+    return t
+
 DATA_DIR = Path(__file__).parent / "data"
 DATA_FILE = DATA_DIR / "latest_recommendations.json"
 VALIDATION_FILE = DATA_DIR / "validation.json"
+OPENAI_OAUTH_TOKEN_FILE = DATA_DIR / "openai_oauth_token.json"
+OPENAI_OAUTH_STATE_CACHE: dict[str, float] = {}
 LAST_RECOMMENDATIONS = None
 FLOW_DIVERGENCE_CACHE = {"ts": 0.0, "key": "", "payload": None}
 FLOW_DIVERGENCE_JOBS = {}
@@ -32,6 +150,13 @@ UNIVERSE_CACHE_FILE = Path("/tmp/stock326_universe_cache.json")
 FLOW_DIVERGENCE_CACHE_FILE = Path("/tmp/stock326_flow_divergence_cache.json")
 MAIN_INFLOW_CACHE = {}
 POLICY_METRICS_CACHE = {"ts": 0.0, "data": {}}
+AI_RUNTIME_STATUS = {
+    "last_ok": None,
+    "last_error": "",
+    "last_error_at": "",
+    "last_provider": "",
+    "last_model": "",
+}
 
 
 # ====== 通用 ======
@@ -2206,6 +2331,2204 @@ def api_run_now():
 def api_run_validation():
     run_validation_job()
     return jsonify({"ok": True, "message": "已完成策略验证更新"})
+
+
+def _market_prefix_for_code(code: str) -> str:
+    return "SH" if code.startswith(("5", "6", "9")) else "SZ"
+
+
+def _fetch_research_reports(code: str, days: int = 730, page_size: int = 20) -> list[dict]:
+    end = _cn_now().strftime("%Y-%m-%d")
+    begin = (_cn_now() - dt.timedelta(days=max(30, min(days, 1460)))).strftime("%Y-%m-%d")
+
+    def em_source() -> list[dict]:
+        out = []
+        max_pages = 12
+        per_page = max(20, min(page_size, 50))
+        for page in range(1, max_pages + 1):
+            url = "https://reportapi.eastmoney.com/report/list"
+            params = {
+                "code": code,
+                "pageNo": page,
+                "pageSize": per_page,
+                "industryCode": "*",
+                "orgCode": "*",
+                "rating": "*",
+                "beginTime": begin,
+                "endTime": end,
+                "qType": 0,
+            }
+            r = requests.get(url, params=params, timeout=10, headers={"User-Agent": "Mozilla/5.0"})
+            r.raise_for_status()
+            data = r.json().get("data") or []
+            if not data:
+                break
+            for x in data:
+                info_code = x.get("infoCode") or ""
+                out.append(
+                    {
+                        "title": x.get("title") or "",
+                        "stockName": x.get("stockName") or "",
+                        "stockCode": x.get("stockCode") or code,
+                        "orgName": x.get("orgName") or x.get("orgSName") or "",
+                        "publishDate": str(x.get("publishDate") or "")[:10],
+                        "analyst": x.get("researcher") or "",
+                        "rating": x.get("emRatingName") or x.get("sRatingName") or "未披露",
+                        "targetPrice": float(x.get("indvAimPriceT") or 0) if str(x.get("indvAimPriceT") or "").strip() else 0,
+                        "industry": x.get("indvInduName") or x.get("industryName") or "",
+                        "pdf": f"https://pdf.dfcfw.com/pdf/H3_{info_code}_1.pdf" if info_code else "",
+                        "source": "东方财富研报中心",
+                    }
+                )
+            if len(data) < per_page:
+                break
+        return out
+
+    def op_required_source() -> list[dict]:
+        # 第二研报源：东方财富F10-运营必读（研报摘要 ybzy）
+        mk = _market_prefix_for_code(code)
+        u = f"https://emweb.securities.eastmoney.com/PC_HSF10/OperationsRequired/PageAjax?code={mk}{code}"
+        r = requests.get(u, timeout=10, headers={"User-Agent": "Mozilla/5.0"})
+        r.raise_for_status()
+        obj = r.json()
+        rows = obj.get("ybzy") or []
+        out = []
+        for x in rows:
+            art = x.get("art_code") or ""
+            out.append({
+                "title": x.get("title") or "",
+                "stockName": "",
+                "stockCode": code,
+                "orgName": x.get("source") or "",
+                "publishDate": str(x.get("publish_time") or "")[:10],
+                "analyst": "",
+                "rating": x.get("em_rating_name") or x.get("s_rating_name") or "未披露",
+                "targetPrice": float(x.get("aim_price") or 0) if str(x.get("aim_price") or "").strip() else 0,
+                "industry": x.get("indu_old_industry_name") or "",
+                "pdf": f"https://pdf.dfcfw.com/pdf/H3_{art}_1.pdf" if art else "",
+                "source": "东方财富F10研报摘要",
+            })
+        return out
+
+    def sina_source() -> list[dict]:
+        # 作为补充源：部分标的可返回研报列表；空则自动忽略
+        out = []
+        symbol = ("sh" if code.startswith(("5", "6", "9")) else "sz") + code
+        url = f"https://stock.finance.sina.com.cn/stock/go.php/vReport_List/kind/search/index.phtml?symbol={symbol}"
+        try:
+            html = requests.get(url, timeout=10, headers={"User-Agent": "Mozilla/5.0"}).content.decode("gb18030", "ignore")
+        except Exception:
+            return out
+
+        rows = re.findall(r"<tr[^>]*>\s*<td[^>]*>(\d+)</td>([\s\S]*?)</tr>", html, flags=re.I)
+        for _, row in rows:
+            t = re.search(r"title=\"([^\"]+)\"", row)
+            d = re.search(r"(20\d{2}-\d{2}-\d{2})", row)
+            org = re.search(r"<td[^>]*>([^<]{2,40}(证券|研究|投顾)[^<]{0,20})</td>", row)
+            title = (t.group(1).strip() if t else "")
+            if not title:
+                continue
+            out.append(
+                {
+                    "title": title,
+                    "stockName": "",
+                    "stockCode": code,
+                    "orgName": (org.group(1).strip() if org else ""),
+                    "publishDate": (d.group(1) if d else ""),
+                    "analyst": "",
+                    "rating": "未披露",
+                    "targetPrice": 0,
+                    "industry": "",
+                    "pdf": "",
+                    "source": "新浪财经研报",
+                }
+            )
+        return out
+
+    all_rows = []
+    for fn in (em_source, op_required_source, sina_source):
+        try:
+            all_rows.extend(fn())
+        except Exception:
+            continue
+
+    # 去重：标题+日期优先；同一天同标题若机构简称/全称冲突，优先保留更长机构名
+    dedup = {}
+    for x in all_rows:
+        k = f"{x.get('title','')}|{x.get('publishDate','')}"
+        old = dedup.get(k)
+        if (not old) or len(str(x.get('orgName') or '')) > len(str(old.get('orgName') or '')):
+            dedup[k] = x
+
+    out = list(dedup.values())
+    out.sort(key=lambda z: (z.get("publishDate") or ""), reverse=True)
+    return out[:120]
+
+
+def _fetch_business_lines(code: str) -> dict:
+    mk = _market_prefix_for_code(code)
+
+    biz_url = f"https://emweb.securities.eastmoney.com/PC_HSF10/BusinessAnalysis/PageAjax?code={mk}{code}"
+    biz = requests.get(biz_url, timeout=10, headers={"User-Agent": "Mozilla/5.0"})
+    biz.raise_for_status()
+    biz_obj = biz.json()
+
+    profile_url = f"https://emweb.securities.eastmoney.com/PC_HSF10/CompanySurvey/PageAjax?code={mk}{code}"
+    profile_obj = {}
+    try:
+        p = requests.get(profile_url, timeout=10, headers={"User-Agent": "Mozilla/5.0"})
+        p.raise_for_status()
+        profile_obj = p.json()
+    except Exception:
+        profile_obj = {}
+
+    scope = ""
+    zyfw = biz_obj.get("zyfw") or []
+    if zyfw:
+        scope = str((zyfw[0] or {}).get("BUSINESS_SCOPE") or "")
+
+    jbzl = profile_obj.get("jbzl") or []
+    profile = (jbzl[0] if jbzl else {}) or {}
+    main_business = str(profile.get("MAIN_BUSINESS") or "")
+
+    seg_rows = biz_obj.get("zygcfx") or []
+    latest_date = ""
+    for row in seg_rows:
+        d = str(row.get("REPORT_DATE") or "")[:10]
+        if d and d > latest_date:
+            latest_date = d
+
+    latest = [x for x in seg_rows if str(x.get("REPORT_DATE") or "")[:10] == latest_date]
+    latest.sort(key=lambda z: float(z.get("MAIN_BUSINESS_INCOME") or 0), reverse=True)
+
+    segments_map = {}
+    for x in latest[:40]:
+        name = (x.get("ITEM_NAME") or "").strip()
+        if not name:
+            continue
+        ratio = float(x.get("MBI_RATIO") or 0) * 100
+        income = float(x.get("MAIN_BUSINESS_INCOME") or 0)
+        old = segments_map.get(name)
+        if (not old) or ratio > old.get("incomeRatioPct", 0):
+            segments_map[name] = {
+                "name": name,
+                "income": income,
+                "incomeRatioPct": round(ratio, 2),
+            }
+    segments = sorted(segments_map.values(), key=lambda z: z.get("incomeRatioPct", 0), reverse=True)[:20]
+
+    review_text = ""
+    jyps = biz_obj.get("jyps") or []
+    if jyps:
+        review_text = str((jyps[0] or {}).get("BUSINESS_REVIEW") or "")
+
+    candidate_text = "；".join([scope, main_business, review_text])
+    # 抽取较具体的业务/产品名称（优先游戏/产品/IP名，避免数字碎片）
+    quoted_names = re.findall(r"《([^》]{2,24})》", candidate_text)
+    tokens = re.findall(r"[\u4e00-\u9fa5A-Za-z0-9\+]{2,24}", candidate_text)
+    stop = {"公司", "业务", "销售", "生产", "服务", "发展", "建设", "推进", "提升", "同比增长", "亿元", "系统", "平台", "实现", "经营", "其中"}
+    specifics = []
+    seen = set()
+
+    def add_item(v: str):
+        v = (v or "").strip("，。；;:： ")
+        if not v or v in stop:
+            return
+        if re.fullmatch(r"\d+(\.\d+)?", v):
+            return
+        if len(v) <= 1:
+            return
+        if v in seen:
+            return
+        seen.add(v)
+        specifics.append(v)
+
+    for q in quoted_names:
+        add_item(q)
+
+    for t in tokens:
+        if t in stop:
+            continue
+        if not re.search(r"游戏|IP|茅台|酒|王子|汉酱|行动组|供应链|数字化|电信|运输|酒店|包装|渠道|出海|新品|系列", t):
+            continue
+        add_item(t)
+        if len(specifics) >= 30:
+            break
+
+    return {
+        "scope": scope,
+        "mainBusiness": main_business,
+        "businessReview": review_text,
+        "specificItems": specifics,
+        "segments": segments,
+        "latestReportDate": latest_date,
+        "source": ["东方财富F10-经营分析", "东方财富F10-公司概况"],
+    }
+
+
+def _generate_report_analysis(code: str, reports: list[dict], business: dict) -> dict:
+    rating_stat = {}
+    org_count = {}
+    targets = []
+
+    for r in reports:
+        rt = (r.get("rating") or "未披露").strip()
+        rating_stat[rt] = rating_stat.get(rt, 0) + 1
+        org = (r.get("orgName") or "未知机构").strip()
+        org_count[org] = org_count.get(org, 0) + 1
+        tp = float(r.get("targetPrice") or 0)
+        if tp > 0:
+            targets.append(tp)
+
+    top_orgs = sorted(org_count.items(), key=lambda x: x[1], reverse=True)[:6]
+    avg_target = round(sum(targets) / len(targets), 2) if targets else None
+
+    segs = business.get("segments") or []
+    top_segments = [f"{x['name']}（收入占比{round(x['incomeRatioPct'], 2)}%）" for x in segs[:5]]
+
+    points = [
+        f"近阶段共收集到 {len(reports)} 篇券商/研究机构研报，覆盖机构数 {len(org_count)} 家。",
+        f"机构观点分布：{ '；'.join([f'{k}{v}篇' for k,v in sorted(rating_stat.items(), key=lambda x:x[1], reverse=True)[:4]]) or '暂无明确评级' }。",
+        f"若按已披露目标价口径统计，机构一致预期目标价均值约为 {avg_target} 元。" if avg_target else "公开研报中可提取的目标价样本不足，建议补充公告或机构路演纪要进行交叉验证。",
+        f"公司当前核心业务线（按最近披露口径）集中在：{'、'.join(top_segments) if top_segments else '暂无可解析分部数据'}。",
+        "基于研报的实操建议：优先跟踪“评级变化 + 目标价调整 + 分部收入占比变化”三项同步变化，作为后续研究更新触发器。",
+    ]
+
+    return {
+        "summary": points,
+        "stats": {
+            "reportCount": len(reports),
+            "orgCount": len(org_count),
+            "ratingStat": rating_stat,
+            "avgTargetPrice": avg_target,
+            "topOrgs": [{"name": k, "count": v} for k, v in top_orgs],
+        },
+        "disclaimer": "本页面仅用于研究信息整合，不构成投资建议。",
+        "stockCode": code,
+    }
+
+
+def _call_openai_oauth_json(system_prompt: str, user_payload: dict, schema: dict) -> dict | None:
+    """通过 OpenAI OAuth Access Token 调用结构化抽取（与 OpenClaw 自身鉴权隔离）"""
+    token = _get_openai_access_token()
+    if not token:
+        AI_RUNTIME_STATUS.update({
+            "last_ok": False,
+            "last_error": "未配置可用的AI Token（或Token为空）",
+            "last_error_at": dt.datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        })
+        return None
+
+    # 默认走千问兼容接口；如需OpenAI可改回对应BASE_URL
+    base_url = (os.getenv("STOCK_RESEARCH_OPENAI_BASE_URL") or "https://dashscope.aliyuncs.com/compatible-mode/v1").rstrip("/")
+    model = (os.getenv("STOCK_RESEARCH_OPENAI_MODEL") or "qwen-plus").strip()
+    timeout_raw = (os.getenv("STOCK_RESEARCH_OPENAI_TIMEOUT") or "0").strip()
+    # 主公要求：不做超时限制。设为0或空时，requests使用无限等待(None)
+    timeout = None
+    try:
+        t = int(timeout_raw or 0)
+        timeout = None if t <= 0 else t
+    except Exception:
+        timeout = None
+
+    url = f"{base_url}/chat/completions"
+    headers = {
+        "Authorization": f"Bearer {token}",
+        "Content-Type": "application/json",
+    }
+    body = {
+        "model": model,
+        "messages": [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": json.dumps(user_payload, ensure_ascii=False)},
+        ],
+        "temperature": 0.45,
+        "top_p": 0.9,
+    }
+
+    # 千问兼容口径：不强绑 response_format，避免输出空模板
+    if not ("dashscope.aliyuncs.com" in base_url or model.startswith("qwen")):
+        body["response_format"] = {
+            "type": "json_schema",
+            "json_schema": {
+                "name": "business_map",
+                "strict": True,
+                "schema": schema,
+            },
+        }
+
+    def _parse_content(content: str):
+        if not content:
+            return None
+        try:
+            return json.loads(content)
+        except Exception:
+            m = re.search(r"\{[\s\S]*\}", content)
+            return json.loads(m.group(0)) if m else None
+
+    try:
+        resp = requests.post(url, headers=headers, json=body, timeout=timeout)
+        resp.raise_for_status()
+        data = resp.json()
+        content = (((data.get("choices") or [{}])[0].get("message") or {}).get("content") or "").strip()
+        obj = _parse_content(content)
+        if obj:
+            AI_RUNTIME_STATUS.update({
+                "last_ok": True,
+                "last_error": "",
+                "last_error_at": "",
+                "last_provider": base_url,
+                "last_model": model,
+            })
+            return obj
+
+        # 兜底二次调用：去掉response_format，要求直接返回JSON对象
+        body2 = dict(body)
+        body2.pop("response_format", None)
+        body2["messages"] = [
+            {"role": "system", "content": system_prompt + " 你必须仅返回一个JSON对象，不要Markdown。"},
+            {"role": "user", "content": json.dumps(user_payload, ensure_ascii=False)},
+        ]
+        resp2 = requests.post(url, headers=headers, json=body2, timeout=timeout)
+        resp2.raise_for_status()
+        data2 = resp2.json()
+        content2 = (((data2.get("choices") or [{}])[0].get("message") or {}).get("content") or "").strip()
+        obj2 = _parse_content(content2)
+        if obj2:
+            AI_RUNTIME_STATUS.update({
+                "last_ok": True,
+                "last_error": "",
+                "last_error_at": "",
+                "last_provider": base_url,
+                "last_model": model,
+            })
+            return obj2
+
+        AI_RUNTIME_STATUS.update({
+            "last_ok": False,
+            "last_error": "AI返回内容无法解析为JSON",
+            "last_error_at": dt.datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            "last_provider": base_url,
+            "last_model": model,
+        })
+        return None
+    except Exception as e:
+        AI_RUNTIME_STATUS.update({
+            "last_ok": False,
+            "last_error": str(e)[:240],
+            "last_error_at": dt.datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            "last_provider": base_url,
+            "last_model": model,
+        })
+        return None
+
+
+def _ai_quality_score(obj: dict | None) -> tuple[int, dict]:
+    if not obj:
+        return 0, {"summary": 0, "lines": 0, "products": 0, "strategy": 0}
+    summary = 1 if len((obj.get("mainBusinessSummary") or "").strip()) >= 90 else 0
+    lines = len(obj.get("businessLines") or [])
+    products = len(obj.get("canonicalProducts") or [])
+    strategy = len(obj.get("strategyTimeline") or [])
+    score = summary + min(lines, 8) + min(products, 24) + min(strategy, 8)
+    return score, {"summary": summary, "lines": lines, "products": products, "strategy": strategy}
+
+
+def _ai_extract_business_map(code: str, name: str, reports: list[dict], business: dict) -> dict | None:
+    # 高信息密度输入 + 多轮提炼，不省token，优先质量
+    report_evidence = []
+    for r in reports[:40]:
+        t = (r.get("title") or "").strip()
+        if not t:
+            continue
+        report_evidence.append({
+            "title": t,
+            "date": r.get("publishDate") or "",
+            "org": r.get("orgName") or "",
+            "url": r.get("pdf") or r.get("url") or "",
+        })
+
+    ann = []
+    news = []
+    try:
+        ann = _fetch_company_announcements(code, page_size=18)
+    except Exception:
+        ann = []
+    try:
+        news = _fetch_company_news(name or code, limit=18)
+    except Exception:
+        news = []
+
+    candidate_products = set()
+    for x in (business.get("specificItems") or [])[:60]:
+        xx = (x or "").strip()
+        if 1 < len(xx) <= 28:
+            candidate_products.add(xx)
+    for s in (business.get("segments") or [])[:30]:
+        nm = (s.get("name") or "").strip()
+        if nm and len(nm) <= 30:
+            candidate_products.add(nm)
+    for r in reports[:50]:
+        t = (r.get("title") or "")
+        for m in re.findall(r"《([^》]{2,24})》", t):
+            candidate_products.add(m)
+        for m in re.findall(r"(太空杀|SuperSus|征途系列|原始征途|球球大作战|茅台酒|茅台1935|王子酒|汉酱|Opera|StarMaker|Grindr|SkyMusic|天工大模型)", t, flags=re.I):
+            candidate_products.add(str(m))
+
+    payload = {
+        "code": code,
+        "name": name,
+        "report_evidence": report_evidence,
+        "business_segments": business.get("segments") or [],
+        "business_specific_items": business.get("specificItems") or [],
+        "main_business": business.get("mainBusiness") or "",
+        "business_review": business.get("businessReview") or "",
+        "announcements": ann,
+        "news": news,
+        "candidate_products": sorted(list(candidate_products))[:120],
+        "task_rules": {
+            "min_products": 18,
+            "min_strategy_items": 6,
+            "need_dates": True,
+            "keep_unreported_but_real_products": True,
+        },
+        "output_template": {
+            "mainBusinessSummary": "string>=120",
+            "businessLines": [{"name": "", "subLine": "", "confidence": 0.0}],
+            "canonicalProducts": [{"name": "", "aliases": [""], "line": "", "image_url": "", "mention_count": 0, "confidence": 0.0, "evidence": [{"source": "", "date": "", "snippet": "", "url": ""}]}],
+            "strategyTimeline": [{"date": "YYYY-MM-DD", "event": "", "whyImportant": "", "source": "", "url": ""}]
+        }
+    }
+
+    schema = {
+        "type": "object",
+        "properties": {
+            "mainBusinessSummary": {"type": "string"},
+            "businessLines": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "name": {"type": "string"},
+                        "subLine": {"type": "string"},
+                        "confidence": {"type": "number"},
+                    },
+                    "required": ["name", "subLine", "confidence"],
+                    "additionalProperties": False,
+                },
+            },
+            "canonicalProducts": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "name": {"type": "string"},
+                        "aliases": {"type": "array", "items": {"type": "string"}},
+                        "line": {"type": "string"},
+                        "image_url": {"type": "string"},
+                        "mention_count": {"type": "number"},
+                        "confidence": {"type": "number"},
+                        "evidence": {
+                            "type": "array",
+                            "items": {
+                                "type": "object",
+                                "properties": {
+                                    "source": {"type": "string"},
+                                    "date": {"type": "string"},
+                                    "snippet": {"type": "string"},
+                                    "url": {"type": "string"},
+                                },
+                                "required": ["source", "date", "snippet", "url"],
+                                "additionalProperties": False,
+                            },
+                        },
+                    },
+                    "required": ["name", "aliases", "line", "image_url", "mention_count", "confidence", "evidence"],
+                    "additionalProperties": False,
+                },
+            },
+            "strategyTimeline": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "date": {"type": "string"},
+                        "event": {"type": "string"},
+                        "whyImportant": {"type": "string"},
+                        "source": {"type": "string"},
+                        "url": {"type": "string"}
+                    },
+                    "required": ["date", "event", "whyImportant", "source", "url"],
+                    "additionalProperties": False
+                }
+            },
+        },
+        "required": ["mainBusinessSummary", "businessLines", "canonicalProducts", "strategyTimeline"],
+        "additionalProperties": False,
+    }
+
+    system_prompt = (
+        "你是A股上市公司研究总监。你的输出要直接可上网页，信息必须密、具体、可验证。"
+        "请综合使用：研报、分部数据、公告、新闻，以及你掌握的公开常识，完成结构化结果。"
+        "不要把任务理解成‘只从研报找关键词’，目标是尽量找全真实产品与业务线。"
+        "硬性要求："
+        "1) mainBusinessSummary 至少120字，必须写清收入结构、产品结构、区域结构、增长抓手与风险点；禁止空话。"
+        "2) businessLines 至少6条，细化到可研究层级（如端游/手游、发行/运营、国内/海外、广告/增值服务等）。"
+        "3) canonicalProducts 尽量找全，目标>=18条；没在研报出现但客观存在的产品也要纳入；mention_count可为0。"
+        "并优先吸收 candidate_products 列表中的实体，做同义归并后输出。"
+        "4) 每个产品必须给line、confidence，并尽量给aliases、image_url与evidence；禁止使用笼统词（如AI游戏/游戏业务/产品平台）。"
+        "5) strategyTimeline 至少6条，必须有时间点（date），写明‘当时说了什么/做了什么’，并附source与url。"
+        "6) 不允许空数组：businessLines、canonicalProducts、strategyTimeline 不能返回空。"
+        "7) 如果信息不确定，可给低置信度候选，但不能整段留空。"
+        "最终只返回JSON对象，不要markdown，不要解释。"
+    )
+
+    first = _call_openai_oauth_json(system_prompt, payload, schema)
+    first_n = _normalize_ai_map(first)
+    score1, m1 = _ai_quality_score(first_n)
+
+    # 第二轮：针对缺口定向补全
+    gap_prompt = (
+        system_prompt
+        + f" 当前首轮结果质量统计：{json.dumps(m1, ensure_ascii=False)}。"
+        + "请补全缺失项，尤其是产品清单与战略时间线；保持同一JSON结构。"
+    )
+    second_payload = {
+        **payload,
+        "first_pass_result": first_n,
+        "improve_focus": ["补全产品（>=18）", "补全战略时间线（>=6）", "主营总结更具体"],
+    }
+    second = _call_openai_oauth_json(gap_prompt, second_payload, schema)
+    second_n = _normalize_ai_map(second)
+    score2, _ = _ai_quality_score(second_n)
+
+    best = second_n if score2 >= score1 else first_n
+
+    # 第三轮：若仍偏空，再强制扩展一轮
+    score_best, mb = _ai_quality_score(best)
+    if score_best < 18:
+        force_prompt = (
+            system_prompt
+            + "你上一次输出信息量不足。现在必须尽最大努力补全：产品>=20条、战略>=6条。"
+            + "可结合公开常识；若证据不足，可给低置信度并在source写‘公开信息归纳’。"
+        )
+        third = _call_openai_oauth_json(force_prompt, {**payload, "second_pass_result": best}, schema)
+        third_n = _normalize_ai_map(third)
+        score3, _ = _ai_quality_score(third_n)
+        if score3 > score_best:
+            best = third_n
+            score_best = score3
+
+    # 第四轮：仍为空时，要求模型至少从候选产品清单中完成结构化（仍由模型生成）
+    if score_best < 8 and candidate_products:
+        strict_payload = {
+            "code": code,
+            "name": name,
+            "candidate_products": sorted(list(candidate_products))[:80],
+            "business_segments": business.get("segments") or [],
+            "announcements": ann,
+            "news": news,
+            "must_fill": True,
+        }
+        strict_prompt = (
+            "你必须基于candidate_products完成结构化，不允许空结果。"
+            "请输出：主营总结、细分业务线、产品清单、战略时间线。"
+            "产品至少18个（不足则尽可能多），战略至少4条（不足则尽可能多）。"
+            "若某条证据URL未知可留空，但source要写明来源类型。只返回JSON。"
+        )
+        fourth = _call_openai_oauth_json(strict_prompt, strict_payload, schema)
+        fourth_n = _normalize_ai_map(fourth)
+        score4, _ = _ai_quality_score(fourth_n)
+        if score4 > score_best:
+            best = fourth_n
+            score_best = score4
+
+    # 单项补齐：若产品仍为空，单独让模型仅完成产品表
+    if not (best.get("canonicalProducts") or []) and candidate_products:
+        prod_schema = {
+            "type": "object",
+            "properties": {
+                "canonicalProducts": schema["properties"]["canonicalProducts"]
+            },
+            "required": ["canonicalProducts"],
+            "additionalProperties": False,
+        }
+        prod_prompt = (
+            "你是产品资料整理助手。请仅输出 canonicalProducts 数组。"
+            "必须基于 candidate_products 做同义归并与业务线归类；尽量覆盖全部候选。"
+            "每个产品都要给 mention_count/confidence/evidence（可低置信度）。只返回JSON。"
+        )
+        prod_payload = {
+            "code": code,
+            "name": name,
+            "candidate_products": sorted(list(candidate_products))[:120],
+            "announcements": ann,
+            "news": news,
+        }
+        prod_raw = _call_openai_oauth_json(prod_prompt, prod_payload, prod_schema)
+        prod_n = _normalize_ai_map(prod_raw)
+        if prod_n.get("canonicalProducts"):
+            best["canonicalProducts"] = prod_n.get("canonicalProducts")
+
+    # 单项补齐：若主营为空，单独生成主营总结
+    if not (best.get("mainBusinessSummary") or "").strip():
+        sum_schema = {
+            "type": "object",
+            "properties": {"mainBusinessSummary": {"type": "string"}},
+            "required": ["mainBusinessSummary"],
+            "additionalProperties": False,
+        }
+        sum_prompt = (
+            "请仅输出 mainBusinessSummary，至少150字，必须具体写清主营结构、增长抓手、风险点。"
+            "禁止空话，只返回JSON。"
+        )
+        sum_payload = {
+            "code": code,
+            "name": name,
+            "business_segments": business.get("segments") or [],
+            "announcements": ann,
+            "news": news,
+            "report_evidence": report_evidence[:15],
+        }
+        sum_raw = _call_openai_oauth_json(sum_prompt, sum_payload, sum_schema)
+        sum_n = _normalize_ai_map(sum_raw)
+        if (sum_n.get("mainBusinessSummary") or "").strip():
+            best["mainBusinessSummary"] = sum_n.get("mainBusinessSummary")
+
+    return best
+
+
+def _normalize_ai_map(ai_map: dict | None) -> dict:
+    """只做结构归一化，不新增任何本地推断内容。"""
+    src = ai_map if isinstance(ai_map, dict) else {}
+
+    summary = (src.get("mainBusinessSummary") or src.get("main_business_summary") or src.get("主营业务总结") or "").strip()
+
+    lines_raw = src.get("businessLines") or src.get("business_lines") or src.get("细分业务线") or []
+    lines = []
+    for x in lines_raw:
+        if not isinstance(x, dict):
+            continue
+        nm = (x.get("name") or x.get("line") or "").strip()
+        sub = (x.get("subLine") or x.get("sub_line") or x.get("detail") or "").strip()
+        conf = float(x.get("confidence") or 0.0)
+        if nm:
+            lines.append({"name": nm, "subLine": sub, "confidence": conf})
+
+    prods_raw = src.get("canonicalProducts") or src.get("products") or src.get("productList") or src.get("核心产品") or []
+    prods = []
+    for p in prods_raw:
+        if not isinstance(p, dict):
+            continue
+        nm = (p.get("name") or "").strip()
+        if not nm:
+            continue
+
+        ev_raw = p.get("evidence") or []
+        ev_norm = []
+        for ev in ev_raw:
+            if isinstance(ev, dict):
+                ev_norm.append({
+                    "source": (ev.get("source") or "").strip(),
+                    "date": (ev.get("date") or "").strip(),
+                    "snippet": (ev.get("snippet") or ev.get("text") or "").strip(),
+                    "url": (ev.get("url") or "").strip(),
+                })
+            elif isinstance(ev, str):
+                txt = ev.strip()
+                if txt:
+                    ev_norm.append({"source": "AI输出", "date": "", "snippet": txt, "url": ""})
+
+        prods.append({
+            "name": nm,
+            "aliases": p.get("aliases") or [],
+            "line": (p.get("line") or p.get("businessLine") or "").strip(),
+            "image_url": (p.get("image_url") or p.get("image") or "").strip(),
+            "mention_count": float(p.get("mention_count") or p.get("mentions") or 0),
+            "confidence": float(p.get("confidence") or 0.0),
+            "evidence": ev_norm,
+        })
+
+    st_raw = src.get("strategyTimeline") or src.get("strategy_timeline") or src.get("strategies") or src.get("战略时间线") or []
+    st = []
+    for x in st_raw:
+        if not isinstance(x, dict):
+            continue
+        st.append({
+            "date": (x.get("date") or x.get("time") or "").strip(),
+            "event": (x.get("event") or x.get("title") or "").strip(),
+            "whyImportant": (x.get("whyImportant") or x.get("reason") or "").strip(),
+            "source": (x.get("source") or "").strip(),
+            "url": (x.get("url") or "").strip(),
+        })
+
+    return {
+        "mainBusinessSummary": summary,
+        "businessLines": lines,
+        "canonicalProducts": prods,
+        "strategyTimeline": st,
+    }
+
+
+def _normalize_product_name(name: str) -> str:
+    n = (name or "").strip()
+    n = re.sub(r"[（(][^）)]*[）)]", "", n).strip()
+    n = re.sub(r"^(以|及|和|与|并|如|例如|包括|包含)", "", n).strip()
+    n = re.sub(r"(等产品|等游戏|产品)$", "", n).strip()
+    n = n.strip("、，,。；;：: ")
+    return n
+
+
+def _is_concrete_product_name(name: str) -> bool:
+    """判断是否为“可上图”的具体产品名，过滤业务口径/动作描述/句子碎片。"""
+    n = _normalize_product_name(name)
+    if (not n) or len(n) < 2 or len(n) > 24:
+        return False
+
+    generic_exact = {
+        "产品", "其他产品", "未分类产品", "业务分部", "经营描述", "研报提及", "产品线",
+        "国内", "国外", "境内", "境外", "系列酒", "茅台酒", "白酒", "平台", "生态",
+        "业务", "主营业务", "游戏业务", "短剧平台", "海外社交网络", "AI软件技术",
+        "移动游戏", "网页游戏", "客户端游戏", "网络游戏", "其他", "其他(补充)",
+    }
+    if n in generic_exact:
+        return False
+
+    if re.search(r"[，。；：:（）()、]|\s{2,}", n):
+        return False
+
+    # 数字指标/事实描述句，非产品名
+    if re.search(r"约\d|\d+万|\d+亿|\d+%|同比|环比|产量|销量|销量|增长率", n):
+        return False
+    if re.search(r"\bIP\b|联名", n, re.I):
+        return False
+
+    bad_kw = re.compile(
+        r"业务|分部|收入|占比|渠道|体系|建设|推进|管理|方面|特征|指南|生产|销售|布局|合作|数字化|经营|策略|战略|规划|增长|能力|解决方案|系统|项目|板块|口径|系列|品牌|物流|运输|包装|碳标签|可持续|地理标志|行业|协会|政策|措施|方案|报告"
+    )
+    if bad_kw.search(n):
+        return False
+
+    if n.endswith(("方面", "业务", "管理", "建设", "策略", "服务", "方案", "报告", "和", "及", "与")):
+        return False
+    if re.match(r"^(新品|新产品|产品|系列)", n):
+        return False
+
+    return True
+
+
+def _normalize_product_category(code: str, name: str, category: str = "", status: str = "") -> str:
+    """分类以AI输出为准：只清理明显脏分类。若无有效分类，返回空串（上层判定失败）。"""
+    c = (category or "").strip()
+
+    generic = {"", "未分类产品", "其他产品", "业务分部", "经营描述", "研报提及", "产品", "AI未分类"}
+    if c in generic:
+        return ""
+
+    # 过滤明显无意义分类标签
+    if re.search(r"业务|分部|经营|描述|口径|未分类", c):
+        return ""
+
+    return c
+
+
+def _enrich_company_info(code: str, ai_map: dict, business: dict, reports: list[dict], announcements: list[dict], news: list[dict]) -> tuple[dict, dict]:
+    """对AI输出做本地审校+补全，确保页面信息足够细、完整、可展示。"""
+    out = dict(ai_map or {})
+
+    summary = (out.get("mainBusinessSummary") or "").strip()
+    if len(summary) < 120:
+        seg_txt = "；".join([f"{x.get('name','')}占比{x.get('incomeRatioPct',0)}%" for x in (business.get("segments") or [])[:8]])
+        rpt_txt = "；".join([f"{(r.get('publishDate') or '')[:10]} {r.get('orgName') or ''}《{(r.get('title') or '')[:28]}》" for r in (reports or [])[:6]])
+        summary = (
+            f"基于公开研报与公司分部数据，当前主营结构可归纳为：{seg_txt or '分部数据待补'}。"
+            f"近阶段核心跟踪观点包括：{rpt_txt or '近期研报样本较少'}。"
+            "建议重点跟踪收入结构变化、重点产品生命周期、海外/国内区域贡献变化，以及费用率和现金流质量。"
+        )[:520]
+    out["mainBusinessSummary"] = summary
+
+    # 业务线补全（目标 >=10）
+    lines = list(out.get("businessLines") or [])
+    seen_line = {str((x.get('name') if isinstance(x, dict) else '')) for x in lines if isinstance(x, dict)}
+    for p in (out.get("canonicalProducts") or []):
+        ln = (p.get("line") or "").strip() if isinstance(p, dict) else ""
+        if ln and ln not in seen_line:
+            lines.append({"name": ln, "subLine": "由产品归并", "confidence": 0.58})
+            seen_line.add(ln)
+    for s in (business.get("segments") or []):
+        nm = (s.get("name") or "").strip()
+        if nm and nm not in seen_line:
+            lines.append({"name": nm, "subLine": "公司分部口径", "confidence": 0.62})
+            seen_line.add(nm)
+        if len(lines) >= 16:
+            break
+    out["businessLines"] = lines[:16]
+
+    # 产品补全（目标 >=28）
+    products = list(out.get("canonicalProducts") or [])
+    seen_prod = {((x.get("name") or "").strip()) for x in products if isinstance(x, dict)}
+
+    def add_product(name: str, line: str = "", conf: float = 0.52, source: str = "本地补全"):
+        nm = _normalize_product_name(name)
+        if (not nm) or (not _is_concrete_product_name(nm)) or nm in seen_prod:
+            return
+        seen_prod.add(nm)
+        products.append({
+            "name": nm,
+            "aliases": [],
+            "line": line,
+            "image_url": "",
+            "mention_count": 0,
+            "confidence": conf,
+            "evidence": [{"source": source, "date": "", "snippet": nm, "url": ""}],
+        })
+
+    for t in [x.get("name") for x in (business.get("segments") or []) if isinstance(x, dict)]:
+        if t:
+            add_product(t, line="业务分部", source="公司分部数据")
+
+    for r in (reports or [])[:120]:
+        title = (r.get("title") or "")
+        for m in re.findall(r"《([^》]{2,24})》", title):
+            # 仅保留“产品名”级别，过滤政策/行业报告类标题
+            if re.search(r"报告|行业|策略|点评|措施|方案|协会|数据|月报|季报|年报", m):
+                continue
+            add_product(m, line="研报提及", source=f"研报/{r.get('orgName') or '未知机构'}")
+
+    for kw in (business.get("specificItems") or [])[:80]:
+        if len(kw) <= 24:
+            add_product(kw, line="经营描述", source="公司经营分析")
+
+    out["canonicalProducts"] = products[:60]
+
+    # 战略时间线补全：仅保留“业务未来展望”口径（优先研报，不混入公告/员工持股等资本动作）
+    strategy = list(out.get("strategyTimeline") or [])
+    future_kw = re.compile(r"未来|展望|规划|布局|新品|上线|出海|增长|目标|战略|pipeline|roadmap", re.I)
+    for r in (reports or [])[:120]:
+        title = (r.get("title") or "").strip()
+        if not title or (not future_kw.search(title)):
+            continue
+        strategy.append({
+            "date": (r.get("publishDate") or "")[:10],
+            "event": title[:80],
+            "whyImportant": "来自研报的未来业务展望线索。",
+            "source": f"研报/{r.get('orgName') or '未知机构'}",
+            "url": r.get("pdf") or r.get("url") or "",
+        })
+
+    uniq = []
+    seen_st = set()
+    for x in strategy:
+        if not isinstance(x, dict):
+            continue
+        k = f"{x.get('date','')}|{x.get('event','')}"
+        if k in seen_st:
+            continue
+        seen_st.add(k)
+        uniq.append(x)
+    biz_future_re = re.compile(r"新品|上线|版本|出海|用户|DAU|流水|增长|产品|品类|商业化|平台|生态|运营|研发|IP|矩阵|赛道|未来|展望|规划|布局", re.I)
+    out["strategyTimeline"] = [x for x in uniq if biz_future_re.search((x.get("event") or "") + " " + (x.get("whyImportant") or ""))][:30]
+
+    # 002558（巨人网络）专项产品口径：按主公要求输出精细产品清单，避免笼统词
+    if code == "002558":
+        preset = [
+            ("核心主营产品", "征途", "国战MMO", "", 5),
+            ("核心主营产品", "征途2", "国战MMO", "", 5),
+            ("核心主营产品", "原始征途", "国战MMO手游", "", 4),
+            ("核心主营产品", "绿色征途", "MMO", "", 3),
+            ("核心主营产品", "王者征途", "MMO手游", "", 3),
+            ("核心主营产品", "球球大作战", "休闲竞技", "", 5),
+            ("核心主营产品", "太空杀", "派对/狼人杀类", "", 4),
+            ("核心主营产品", "月圆之夜", "Roguelike卡牌", "", 3),
+            ("核心主营产品", "超自然行动组", "多人恐怖", "", 4),
+            ("次核心产品", "名将杀", "卡牌", "", 2),
+            ("次核心产品", "帕斯卡契约", "动作RPG", "", 2),
+            ("次核心产品", "口袋斗蛐蛐", "轻度休闲", "新", 2),
+            ("次核心产品", "街篮2（发行）", "体育竞技", "", 2),
+            ("次核心产品", "龙枪觉醒", "MMO", "", 2),
+            ("传统端游", "巨人", "MMO", "低活跃", 1),
+            ("传统端游", "仙途", "MMO", "停运/弱", 1),
+            ("传统端游", "仙侠世界", "MMO", "低活跃", 1),
+            ("传统端游", "战国破坏神", "MMO", "停运", 1),
+            ("传统端游", "万王之王3", "MMO", "低活跃", 1),
+            ("传统端游", "江湖", "MMO", "停运", 1),
+            ("传统端游", "龙魂", "MMO", "停运", 1),
+            ("传统端游", "兵王", "MMO", "停运", 1),
+            ("代理/合作产品", "艾尔之光", "横版格斗", "代理", 1),
+            ("代理/合作产品", "苍天2", "MMO", "代理", 1),
+            ("代理/合作产品", "巫师之怒", "MMO", "代理", 1),
+            ("特殊项目/单机/军方合作", "光荣使命", "FPS", "军方合作", 1),
+            ("测试项目/未正式大规模上线", "奥西里之环", "RPG", "测试/孵化", 1),
+            ("测试项目/未正式大规模上线", "代号巨人X", "未公开", "测试/孵化", 1),
+            ("测试项目/未正式大规模上线", "其他未公开项目", "—", "测试/孵化", 1),
+        ]
+        metrics = {
+            "超自然行动组": {"dau": "1000万+"},
+        }
+        out["canonicalProducts"] = [{
+            "name": n,
+            "aliases": [],
+            "line": c,
+            "type": t,
+            "status": s,
+            "coreScore": sc,
+            "dau": (metrics.get(n) or {}).get("dau", ""),
+            "revenue": (metrics.get(n) or {}).get("revenue", ""),
+            "image_url": "",
+            "mention_count": 0,
+            "confidence": 0.92 if sc >= 3 else 0.78,
+            "evidence": [{"source": "主公确认口径", "date": "", "snippet": f"{n}/{t}/{s}", "url": ""}],
+        } for (c, n, t, s, sc) in preset]
+        out["businessLines"] = [{"name": c, "subLine": "产品分层", "confidence": 0.9} for c in [
+            "核心主营产品", "次核心产品", "传统端游", "代理/合作产品", "特殊项目/单机/军方合作", "测试项目/未正式大规模上线"
+        ]]
+        # 去除笼统词条
+        ban_re = re.compile(r"^(AI软件技术|短剧平台|海外社交网络|游戏相关业务|产品线|业务分部)$")
+        out["canonicalProducts"] = [x for x in (out.get("canonicalProducts") or []) if not ban_re.search((x.get("name") or "").strip())]
+
+    audit = {
+        "summary_len": len(out.get("mainBusinessSummary") or ""),
+        "business_lines": len(out.get("businessLines") or []),
+        "products": len(out.get("canonicalProducts") or []),
+        "strategy": len(out.get("strategyTimeline") or []),
+        "pass": bool(len(out.get("mainBusinessSummary") or "") >= 120 and len(out.get("businessLines") or []) >= 6 and len(out.get("canonicalProducts") or []) >= 18 and len(out.get("strategyTimeline") or []) >= 4),
+    }
+    return out, audit
+
+
+def _build_node_evidence_map(tree: dict, reports: list[dict], business: dict, ai_map: dict | None = None) -> dict:
+    node_map: dict[str, list[dict]] = {}
+
+    def clean_name(v: str) -> str:
+        v = re.sub(r"（[^）]*）", "", v or "")
+        v = re.sub(r"\([^\)]*\)", "", v)
+        if "：" in v:
+            v = v.split("：", 1)[-1]
+        return v.strip()
+
+    def add_evidence(node_name: str, item: dict):
+        arr = node_map.setdefault(node_name, [])
+        key = (item.get("source", ""), item.get("date", ""), item.get("snippet", ""))
+        if key in {(x.get("source", ""), x.get("date", ""), x.get("snippet", "")) for x in arr}:
+            return
+        arr.append(item)
+
+    all_nodes = []
+
+    def walk(n: dict):
+        if not n:
+            return
+        all_nodes.append(n.get("name") or "")
+        for c in (n.get("children") or []):
+            walk(c)
+
+    walk(tree)
+
+    for raw in all_nodes:
+        key = clean_name(raw)
+        if not key or len(key) <= 1:
+            continue
+
+        for r in reports[:60]:
+            title = (r.get("title") or "")
+            if key in title:
+                add_evidence(raw, {
+                    "source": f"研报/{r.get('orgName') or '未知机构'}",
+                    "date": r.get("publishDate") or "",
+                    "snippet": title[:180],
+                    "url": r.get("pdf") or r.get("url") or "",
+                    "score": 0.78,
+                })
+
+        for s in (business.get("segments") or []):
+            nm = s.get("name") or ""
+            if key in nm or nm in key:
+                add_evidence(raw, {
+                    "source": "公司分部数据",
+                    "date": business.get("latestReportDate") or "",
+                    "snippet": f"{nm} 收入占比 {s.get('incomeRatioPct', 0)}%",
+                    "url": "",
+                    "score": 0.86,
+                })
+
+    # AI证据并入
+    for p in (ai_map or {}).get("canonicalProducts") or []:
+        p_name = (p.get("name") or "").strip()
+        if not p_name:
+            continue
+        for node_name in list(node_map.keys()) + all_nodes:
+            if p_name in node_name or node_name in p_name:
+                for e in (p.get("evidence") or [])[:5]:
+                    if isinstance(e, dict):
+                        add_evidence(node_name, {
+                            "source": e.get("source") or "AI融合证据",
+                            "date": e.get("date") or "",
+                            "snippet": e.get("snippet") or "",
+                            "url": e.get("url") or "",
+                            "score": round(float(p.get("confidence") or 0.7), 2),
+                        })
+                    elif isinstance(e, str) and e.strip():
+                        add_evidence(node_name, {
+                            "source": "AI融合证据",
+                            "date": "",
+                            "snippet": e.strip(),
+                            "url": "",
+                            "score": round(float(p.get("confidence") or 0.7), 2),
+                        })
+
+    # 控制体积
+    for k in list(node_map.keys()):
+        node_map[k] = node_map[k][:8]
+
+    return node_map
+
+
+def _ai_audit_products(code: str, name: str, products: list[dict], reports: list[dict], business: dict) -> dict:
+    """二次AI审核产品清单：只保留具体产品名，并给出可解释分类。"""
+    schema = {
+        "type": "object",
+        "properties": {
+            "accepted": {"type": "array", "items": {"type": "object", "properties": {
+                "name": {"type": "string"},
+                "category": {"type": "string"},
+                "tier": {"type": "string"},
+                "status": {"type": "string"}
+            }, "required": ["name", "category", "tier"], "additionalProperties": False}},
+            "rejected": {"type": "array", "items": {"type": "object", "properties": {
+                "name": {"type": "string"},
+                "reason": {"type": "string"}
+            }, "required": ["name", "reason"], "additionalProperties": False}},
+            "auditScore": {"type": "number"}
+        },
+        "required": ["accepted", "rejected", "auditScore"],
+        "additionalProperties": False
+    }
+
+    prompt = (
+        "你是产品数据质检官。任务：审核候选产品列表，只保留‘具体产品名’。"
+        "严格拒绝：业务线、经营描述、物流/运输/包装、ESG口号、行业报告、政策名、泛词（如其他产品/未分类产品）。"
+        "accepted中每项必须包含合理category和tier。"
+        "tier只能是：核心产品、次核心产品、储备产品。"
+        "若不确定则拒绝，不要放行。只返回JSON。"
+    )
+
+    payload = {
+        "code": code,
+        "name": name,
+        "candidates": products[:60],
+        "report_titles": [x.get("title") for x in (reports or [])[:20] if x.get("title")],
+        "business_segments": (business.get("segments") or [])[:12],
+        "business_scope": business.get("scope") or "",
+    }
+
+    raw = _call_openai_oauth_json(prompt, payload, schema) or {}
+    accepted = []
+    seen = set()
+    industry_hint = ""
+    try:
+        industry_hint = "；".join([(x.get("name") or "") for x in (business.get("segments") or [])[:6]]) + "；" + str(business.get("scope") or "")
+    except Exception:
+        industry_hint = ""
+
+    for x in (raw.get("accepted") or []):
+        if not isinstance(x, dict):
+            continue
+        nm = _normalize_product_name(x.get("name") or "")
+        if (not nm) or (not _is_concrete_product_name(nm)) or nm in seen:
+            continue
+        st = (x.get("status") or "").strip()
+        ct = _normalize_product_category(code, nm, (x.get("category") or "").strip(), st) or _infer_fallback_category(nm, (x.get("category") or "").strip(), industry_hint)
+        tr = (x.get("tier") or "").strip()
+        if tr not in {"核心产品", "次核心产品", "储备产品"}:
+            tr = _infer_fallback_tier(nm, st, 0)
+        if not ct:
+            continue
+        seen.add(nm)
+        accepted.append({"name": nm, "category": ct, "tier": tr, "status": st})
+
+    fallback_used = False
+    if not accepted:
+        # AI审核失败时回退到严格规则，不放宽
+        fallback_used = True
+        for x in (products or []):
+            nm = _normalize_product_name(x.get("name") or "")
+            if (not nm) or (not _is_concrete_product_name(nm)) or nm in seen:
+                continue
+            seen.add(nm)
+            st = (x.get("status") or "").strip()
+            ct = _normalize_product_category(code, nm, (x.get("category") or "").strip(), st)
+            if not ct:
+                continue
+            tr = "储备产品" if (nm.startswith("代号") or "测试" in nm or "预研" in nm) else "次核心产品"
+            accepted.append({"name": nm, "category": ct, "tier": tr, "status": st})
+
+    return {
+        "accepted": accepted,
+        "rejected": raw.get("rejected") or [],
+        "auditScore": raw.get("auditScore") if isinstance(raw.get("auditScore"), (int, float)) else None,
+        "usedAI": bool(raw),
+        "fallbackUsed": fallback_used,
+    }
+
+
+def _ai_structured_company_sections(code: str, name: str, reports: list[dict], business: dict, announcements: list[dict] | None = None, news: list[dict] | None = None) -> dict:
+    schema = {
+        "type": "object",
+        "properties": {
+            "products": {"type": "array", "items": {"type": "object", "properties": {
+                "name": {"type": "string"},
+                "category": {"type": "string"},
+                "tier": {"type": "string"},
+                "status": {"type": "string"}
+            }, "required": ["name", "category", "tier"], "additionalProperties": False}},
+            "businessByLine": {"type": "array", "items": {"type": "object", "properties": {
+                "name": {"type": "string"}, "ratio": {"type": "number"}
+            }, "required": ["name"], "additionalProperties": False}},
+            "businessByRegion": {"type": "array", "items": {"type": "object", "properties": {
+                "name": {"type": "string"}, "ratio": {"type": "number"}
+            }, "required": ["name"], "additionalProperties": False}},
+            "topShareholders": {"type": "array", "items": {"type": "object", "properties": {
+                "name": {"type": "string"}, "ratio": {"type": "number"}, "note": {"type": "string"}
+            }, "required": ["name"], "additionalProperties": False}},
+            "competitors": {"type": "array", "items": {"type": "object", "properties": {
+                "name": {"type": "string"}, "reason": {"type": "string"}
+            }, "required": ["name"], "additionalProperties": False}}
+        },
+        "required": ["products", "businessByLine", "businessByRegion", "topShareholders", "competitors"],
+        "additionalProperties": False
+    }
+
+    prompt = (
+        "你是上市公司研究员。输出思维导图结构化数据，必须精确、完整、有逻辑。"
+        "严格要求：1) products 只填具体产品名，禁止短语和笼统词（如AI业务/游戏业务/平台收入）。"
+        "2) 每个 product 必须给 category，且 category 必须是你基于公司产品结构抽象出的分组名（如MMO/卡牌/SLG/休闲/出海产品/储备产品等），禁止空值、禁止'其他产品'。"
+        "3) 每个 product 必须给 tier，且只能是：核心产品、次核心产品、储备产品。"
+        "4) businessByLine 为业务条线及占比。5) businessByRegion 为地区占比。"
+        "6) topShareholders 填前十大股东（能确认多少写多少，不要凑数）。"
+        "7) competitors 为行业竞争对手与一句理由。只返回JSON。"
+    )
+    payload = {
+        "code": code,
+        "name": name,
+        "report_titles": [x.get("title") for x in (reports or [])[:80] if x.get("title")],
+        "business_segments": business.get("segments") or [],
+        "business_scope": business.get("scope") or "",
+        "announcements": [x.get("title") for x in (announcements or [])[:20] if x.get("title")],
+        "news": [x.get("title") for x in (news or [])[:20] if x.get("title")],
+    }
+    raw = _call_openai_oauth_json(prompt, payload, schema) or {}
+
+    def clean_term(v: str) -> str:
+        s = (v or "").strip()
+        s = re.sub(r"[（(].*?[）)]", "", s)
+        s = re.split(r"[，,。;；|｜/]", s)[0].strip()
+        return s[:30]
+
+    out = {"products": [], "businessByLine": [], "businessByRegion": [], "topShareholders": [], "competitors": []}
+
+    industry_hint = ""
+    for rr in (reports or []):
+        if rr.get("industry"):
+            industry_hint = rr.get("industry") or ""
+            break
+    if not industry_hint:
+        industry_hint = str(business.get("scope") or "")
+
+    for p in (raw.get("products") or []):
+        if not isinstance(p, dict):
+            continue
+        n = _normalize_product_name(clean_term(p.get("name") or ""))
+        if (not n) or (not _is_concrete_product_name(n)):
+            continue
+        st = (p.get("status") or "").strip()
+        cat = _normalize_product_category(code, n, (p.get("category") or "").strip(), st) or _infer_fallback_category(n, (p.get("category") or "").strip(), industry_hint)
+        tier_raw = (p.get("tier") or "").strip()
+        tier = tier_raw if tier_raw in {"核心产品", "次核心产品", "储备产品"} else _infer_fallback_tier(n, st, 0)
+        if not cat:
+            continue
+        out["products"].append({"name": n, "category": cat, "tier": tier, "status": st})
+
+    for k in ("businessByLine", "businessByRegion"):
+        for x in (raw.get(k) or []):
+            if not isinstance(x, dict):
+                continue
+            n = clean_term(x.get("name") or "")
+            if not n:
+                continue
+            rr = x.get("ratio")
+            out[k].append({"name": n, "ratio": float(rr) if isinstance(rr, (int, float)) else None})
+
+    for x in (raw.get("topShareholders") or []):
+        if isinstance(x, dict) and (x.get("name") or "").strip():
+            out["topShareholders"].append({"name": (x.get("name") or "").strip(), "ratio": x.get("ratio"), "note": (x.get("note") or "").strip()})
+
+    for x in (raw.get("competitors") or []):
+        if isinstance(x, dict) and (x.get("name") or "").strip():
+            out["competitors"].append({"name": (x.get("name") or "").strip(), "reason": (x.get("reason") or "").strip()})
+
+    # 回退：业务/地区至少有值
+    if not out["businessByLine"]:
+        for s in (business.get("segments") or [])[:12]:
+            nm = (s.get("name") or "").strip()
+            if nm:
+                out["businessByLine"].append({"name": nm, "ratio": s.get("incomeRatioPct")})
+    if not out["businessByRegion"]:
+        for s in (business.get("segments") or [])[:20]:
+            nm = (s.get("name") or "").strip()
+            if any(k in nm for k in ["境内", "境外", "国内", "国外", "海外"]):
+                out["businessByRegion"].append({"name": nm, "ratio": s.get("incomeRatioPct")})
+
+    # 去重
+    def uniq_rows(rows, key='name'):
+        seen = set(); out2 = []
+        for r in rows:
+            v = (r.get(key) or '').strip()
+            if (not v) or v in seen:
+                continue
+            seen.add(v); out2.append(r)
+        return out2
+    out["products"] = uniq_rows(out["products"])[:80]
+
+    # AI二次审核（关键）：防止中间过程混入非产品垃圾项
+    prod_audit = _ai_audit_products(code, name, out["products"], reports, business)
+    out["products"] = (prod_audit.get("accepted") or [])[:60]
+    out["productAudit"] = {
+        "usedAI": bool(prod_audit.get("usedAI")),
+        "fallbackUsed": bool(prod_audit.get("fallbackUsed")),
+        "auditScore": prod_audit.get("auditScore"),
+        "rejectedCount": len(prod_audit.get("rejected") or []),
+    }
+
+    out["businessByLine"] = uniq_rows(out["businessByLine"])[:20]
+    out["businessByRegion"] = uniq_rows(out["businessByRegion"])[:10]
+    out["topShareholders"] = uniq_rows(out["topShareholders"])[:10]
+    out["competitors"] = uniq_rows(out["competitors"])[:15]
+    return out
+
+
+def _infer_fallback_category(name: str, line: str = "", industry: str = "") -> str:
+    n = (name or "").strip()
+    l = (line or "").strip()
+    ind = (industry or "").strip()
+
+    # 优先使用已有业务线标签做映射
+    ln = _normalize_product_category("", n, l, "") if l else ""
+    if ln:
+        if re.search(r"(端游|客户端)", ln):
+            return "客户端游戏"
+        if re.search(r"(手游|移动)", ln):
+            return "移动游戏"
+        if re.search(r"(网页|H5)", ln):
+            return "网页游戏"
+        return ln
+
+    # 游戏类细分（泛化规则）
+    if re.search(r"(Puzzles|Chaos|Survival|SLG|COK|Kings|文明|帝国|战争|末日|霸业)", n, re.I):
+        return "SLG策略产品"
+    if re.search(r"MMO|征途|仙侠|国战|传奇|奇迹|龙之谷|MU|西游|神墓", n, re.I):
+        return "MMO/RPG产品"
+    if re.search(r"卡牌|杀|Roguelike|炉石|回合|将|斗蛐蛐", n, re.I):
+        return "卡牌策略产品"
+    if re.search(r"球球|休闲|派对|竞技|跑酷|消除|捕鱼|狼人杀|太空杀", n, re.I):
+        return "休闲竞技产品"
+    if re.search(r"大掌柜|杂货店|厨神|餐厅|农场|小镇|经营|开店", n, re.I):
+        return "模拟经营产品"
+    if re.search(r"斗罗|斗破|凡人|修仙|仙剑|火影|海贼|葫芦兄弟|IP", n, re.I):
+        return "IP改编产品"
+
+    # 消费/医药等行业兜底
+    if re.search(r"酒|茅台|王子|汉酱|赖茅|大曲", n, re.I):
+        return "酒类产品"
+    if re.search(r"药|针|胶囊|片|注射液|抗体", n, re.I):
+        return "医药产品"
+
+    if "游戏" in ind:
+        return "综合游戏产品"
+    return "主力产品组"
+
+
+def _infer_fallback_tier(name: str, status: str = "", mention_count: float = 0) -> str:
+    n = (name or "").strip()
+    s = (status or "").strip()
+    mc = float(mention_count or 0)
+    if n.startswith("代号") or any(k in n for k in ["测试", "预研", "预约"]):
+        return "储备产品"
+    if any(k in s for k in ["停运", "低活跃"]):
+        return "次核心产品"
+    if mc >= 3:
+        return "核心产品"
+    return "次核心产品"
+
+
+def _build_display_products(code: str, name: str, ai_sections: dict, ai_map: dict, reports: list[dict]) -> list[dict]:
+    industry = ""
+    for r in (reports or []):
+        if r.get("industry"):
+            industry = r.get("industry") or ""
+            break
+
+    out = []
+    seen = set()
+
+    for x in (ai_sections or {}).get("products") or []:
+        if not isinstance(x, dict):
+            continue
+        nm = _normalize_product_name(x.get("name") or "")
+        ct = _normalize_product_category(code, nm, (x.get("category") or "").strip(), (x.get("status") or "").strip())
+        tr = (x.get("tier") or "").strip()
+        if (not _is_concrete_product_name(nm)) or (not ct) or (tr not in {"核心产品", "次核心产品", "储备产品"}) or nm in seen:
+            continue
+        seen.add(nm)
+        out.append({"name": nm, "category": ct, "tier": tr, "status": (x.get("status") or "").strip(), "confidence": 0.92, "mention_count": 0})
+
+    # 若AI分类结果过少，补齐（仍保持分类+层级完整）
+    if len(out) < 8:
+        for p in (ai_map or {}).get("canonicalProducts") or []:
+            if not isinstance(p, dict):
+                continue
+            nm = _normalize_product_name(p.get("name") or "")
+            if (not _is_concrete_product_name(nm)) or nm in seen:
+                continue
+            st = (p.get("status") or "").strip()
+            ct = _normalize_product_category(code, nm, (p.get("line") or "").strip(), st) or _infer_fallback_category(nm, (p.get("line") or "").strip(), industry)
+            tr = _infer_fallback_tier(nm, st, p.get("mention_count") or 0)
+            seen.add(nm)
+            out.append({
+                "name": nm,
+                "category": ct,
+                "tier": tr,
+                "status": st,
+                "confidence": round(float(p.get("confidence") or 0.78), 2),
+                "mention_count": int(float(p.get("mention_count") or 0)),
+            })
+            if len(out) >= 60:
+                break
+
+    out = out[:60]
+
+    # 层级修正：若没有核心产品，按 mention/confidence 提升前20%为核心
+    if out and not any((x.get("tier") == "核心产品") for x in out):
+        ranked = sorted(range(len(out)), key=lambda i: (float(out[i].get("mention_count") or 0), float(out[i].get("confidence") or 0)), reverse=True)
+        topn = max(1, min(6, round(len(out) * 0.2)))
+        for i in ranked[:topn]:
+            out[i]["tier"] = "核心产品"
+
+    return out
+
+
+def _build_business_tree(code: str, name: str, business: dict, reports: list[dict], ai_map: dict | None = None, announcements: list[dict] | None = None, news: list[dict] | None = None, ai_sections: dict | None = None) -> dict:
+    industry = ""
+    for r in reports:
+        if r.get("industry"):
+            industry = r["industry"]
+            break
+
+    segs = business.get("segments") or []
+    geo_seg, platform_seg, product_seg, other_seg = [], [], [], []
+    overseas_ratio = 0.0
+    for s in segs[:20]:
+        n = s['name']
+        r = float(s.get('incomeRatioPct') or 0)
+        # 去掉无信息量/易混淆项
+        if n in {"其他(补充)", "其他", "其他业务"} or "补充" in n:
+            continue
+        # 当有更细分“移动端/电脑端网络游戏业务”时，去掉笼统“游戏相关业务”
+        if n == "游戏相关业务" and any(("网络游戏业务" in (x.get('name') or "")) for x in segs):
+            continue
+
+        node = {"name": f"{n}（{r}%）"}
+        if any(k in n for k in ["境外", "国外"]) or n in {"境外", "国外"}:
+            overseas_ratio += r
+            geo_seg.append(node)
+        elif any(k in n for k in ["境内", "国内"]) or n in {"境内", "国内"}:
+            geo_seg.append(node)
+        elif any(k in n for k in ["移动端", "电脑端", "客户端", "网页", "端游", "手游"]):
+            platform_seg.append(node)
+        elif any(k in n for k in ["游戏", "酒", "系列", "茅台", "产品", "广告", "搜索", "短剧", "社交", "AI"]):
+            product_seg.append(node)
+        else:
+            other_seg.append(node)
+
+    # 若只有海外细分而没有国内细分，自动补充国内业务（更通用）
+    if overseas_ratio > 0 and not any(('境内' in (x.get('name') or '') or '国内' in (x.get('name') or '')) for x in geo_seg):
+        domestic_ratio = round(max(0.0, 100.0 - overseas_ratio), 2)
+        geo_seg.insert(0, {"name": f"国内业务（{domestic_ratio}%）"})
+
+    # 产品/项目聚合：同类放一起，按出现频次排序
+    text_pool = []
+    for r in reports:
+        text_pool.append(r.get("title") or "")
+    text_pool += (business.get("specificItems") or [])
+    text_pool += [x.get('name','') for x in (business.get('segments') or [])]
+
+    freq = {}
+    def inc(k):
+        if not k:
+            return
+        freq[k] = freq.get(k, 0) + 1
+
+    def canonical(name: str) -> str:
+        n = (name or "").strip().replace('收入','').replace('业务','')
+        if re.search(r"太空杀|SuperSus", n, flags=re.I):
+            return "太空杀/SuperSus"
+        if "征途" in n:
+            return "征途系列"
+        if "超自然行动组" in n:
+            return "超自然行动组"
+        if "原始征途" in n:
+            return "原始征途"
+        if "球球大作战" in n:
+            return "球球大作战"
+        if "Opera" in n:
+            return "Opera"
+        if "StarMaker" in n:
+            return "StarMaker"
+        if "Grindr" in n:
+            return "Grindr"
+        if "SkyMusic" in n:
+            return "天工 SkyMusic"
+        if "天工" in n and "SkyMusic" not in n:
+            return "天工大模型"
+        if "搜索" in n and "Opera" in n:
+            return "Opera搜索"
+        if "短剧" in n:
+            return "短剧平台"
+        if "海外社交" in n:
+            return "海外社交网络"
+        if re.search(r"AI|AGI|AIGC", n, flags=re.I):
+            return "AI软件技术"
+        return n
+
+    for t in text_pool:
+        for m in re.findall(r"《([^》]{2,24})》", t):
+            c = canonical(m)
+            if len(c) <= 20:
+                inc(c)
+
+        # 通用品牌/产品名抽取（中英）
+        for m in re.findall(r"(Opera|StarMaker|Grindr|SkyMusic|天工(?:\d+\.\d+)?大模型|天工|超自然行动组|原始征途|球球大作战|太空杀|SuperSus)", t, flags=re.I):
+            inc(canonical(m))
+
+        # 英文品牌词（过滤财务词）
+        for m in re.findall(r"\b([A-Z][A-Za-z]{2,20})\b", t):
+            if m.upper() in {"AI", "AGI", "AIGC", "Q", "EBITDA", "IP"}:
+                continue
+            if m.lower() in {"all", "in", "buy"}:
+                continue
+            inc(canonical(m))
+
+        if "征途" in t:
+            inc("征途系列")
+        if "短剧" in t:
+            inc("短剧平台")
+        if "海外社交" in t:
+            inc("海外社交网络")
+        if re.search(r"AI|AGI|AIGC", t, flags=re.I):
+            inc("AI软件技术")
+
+    # 兜底：从业务词里补一些候选（剔除长句和描述性短语）
+    for x in (business.get("specificItems") or []):
+        if len(x) > 14 or re.search(r"推进|态势|保持|发展|增长|改革|成为|抓手", x):
+            continue
+        if any(k in x for k in ["征途", "行动组", "球球", "太空杀", "SuperSus", "王子酒", "汉酱", "茅台1935"]):
+            inc(canonical(x))
+
+    freq_items = sorted(freq.items(), key=lambda z: z[1], reverse=True)
+    spec_items = [{"name": f"{k}（提及{v}次）"} for k, v in freq_items[:12]]
+
+    # AI增强：优先并入结构化抽取得到的产品项（不替代分部数据，只增强“具体产品/项目”）
+    ai_products = []
+    for p in (ai_map or {}).get("canonicalProducts") or []:
+        nm = (p.get("name") or "").strip()
+        if not nm:
+            continue
+        conf = round(float(p.get("confidence") or 0.7), 2)
+        mc = int(float(p.get("mention_count") or 0))
+        mc_txt = f"提及{mc}次" if mc > 0 else "全网补全"
+        ai_products.append({"name": f"{nm}（{mc_txt} / AI{conf}）"})
+    if ai_products:
+        # 去重合并：AI优先，随后补本地频次项
+        seen2 = set()
+        merged = []
+        for x in ai_products + spec_items:
+            key = re.sub(r"（[^）]*）", "", x.get("name") or "").strip()
+            if not key or key in seen2:
+                continue
+            seen2.add(key)
+            merged.append(x)
+            if len(merged) >= 40:
+                break
+        spec_items = merged
+
+    orgs = []
+    seen = set()
+    for r in reports:
+        o = (r.get("orgName") or "").strip()
+        if o and o not in seen:
+            seen.add(o)
+            orgs.append({"name": o})
+        if len(orgs) >= 10:
+            break
+
+    children = []
+
+    ai_lines = []
+    for bl in (ai_map or {}).get("businessLines") or []:
+        nm = (bl.get("name") or "").strip()
+        sub = (bl.get("subLine") or "").strip()
+        conf = round(float(bl.get("confidence") or 0.7), 2)
+        if nm:
+            ai_lines.append({"name": f"{nm}｜{sub or '细分待补'}（AI{conf}）"})
+    if code == "002558":
+        order = ["核心主营产品", "次核心产品", "传统端游", "代理/合作产品", "特殊项目/单机/军方合作", "测试项目/未正式大规模上线"]
+        grouped = {k: [] for k in order}
+        for p in (ai_map or {}).get("canonicalProducts") or []:
+            if not isinstance(p, dict):
+                continue
+            cat = (p.get("line") or "").strip()
+            if cat not in grouped:
+                continue
+            nm = (p.get("name") or "").strip()
+            tp = (p.get("type") or "").strip()
+            stt = (p.get("status") or "").strip()
+            dau = (p.get("dau") or "").strip()
+            rev = (p.get("revenue") or "").strip()
+            extra = []
+            if dau:
+                extra.append(f"DAU:{dau}")
+            if rev:
+                extra.append(f"流水:{rev}")
+            if stt and ("停运" in stt or "低活跃" in stt):
+                extra.append(stt)
+            tail = f"｜{' / '.join(extra)}" if extra else ""
+            grouped[cat].append({"name": f"{nm}｜{tp or '类型待补'}{tail}"})
+
+        biz_ratio_nodes = []
+        for s in (business.get("segments") or [])[:10]:
+            sn = (s.get("name") or "").strip()
+            rr = s.get("incomeRatioPct")
+            if sn and rr is not None:
+                biz_ratio_nodes.append({"name": f"{sn}（收入占比{rr}%）"})
+
+        product_categories = []
+        for cat in order:
+            if grouped.get(cat):
+                product_categories.append({"name": cat, "children": grouped[cat]})
+
+        if biz_ratio_nodes or product_categories:
+            children.append({"name": "业务主线（业务结构→产品矩阵）", "children": (
+                ([{"name": "业务线收入占比", "children": biz_ratio_nodes}] if biz_ratio_nodes else []) +
+                ([{"name": "产品矩阵", "children": product_categories}] if product_categories else [])
+            )})
+    else:
+        sec = ai_sections or {}
+
+        by_line = [{"name": f"{x.get('name')}（{x.get('ratio')}%）" if x.get('ratio') is not None else x.get('name')} for x in (sec.get("businessByLine") or []) if x.get("name")]
+        by_region = [{"name": f"{x.get('name')}（{x.get('ratio')}%）" if x.get('ratio') is not None else x.get('name')} for x in (sec.get("businessByRegion") or []) if x.get("name")]
+
+        # 产品：同层仅放“具体产品”，不放业务词
+        src_products = []
+        for p in (sec.get("products") or []):
+            nm = ((p or {}).get("name") or "").strip()
+            if not _is_concrete_product_name(nm):
+                continue
+            st = ((p or {}).get("status") or "").strip()
+            ct = _normalize_product_category(code, nm, ((p or {}).get("category") or "").strip(), st)
+            tr = ((p or {}).get("tier") or "").strip()
+            if (not ct) or (tr not in {"核心产品", "次核心产品", "储备产品"}):
+                continue
+            src_products.append({"name": nm, "category": ct, "tier": tr, "status": st})
+        if not src_products:
+            for p in (ai_map or {}).get("canonicalProducts") or []:
+                if not isinstance(p, dict):
+                    continue
+                nm = (p.get("name") or "").strip()
+                if not _is_concrete_product_name(nm):
+                    continue
+                st = (p.get("status") or "").strip()
+                cat = _normalize_product_category(code, nm, (p.get("line") or "未分类产品").strip(), st)
+                if not cat:
+                    continue
+                src_products.append({
+                    "name": nm,
+                    "category": cat,
+                    "tier": "次核心产品",
+                    "status": st,
+                })
+
+        prod_rows = []
+        for p in src_products:
+            n = (p.get("name") or "").strip()
+            if not n:
+                continue
+            stt = (p.get("status") or "").strip()
+            tr = (p.get("tier") or "").strip()
+            tail = f"｜{tr}" if tr else ""
+            if stt and ("停运" in stt or "低活跃" in stt):
+                tail += f"｜{stt}"
+            prod_rows.append({"name": f"{n}{tail}"})
+
+        product_by_cat = {}
+        for p in src_products:
+            n = (p.get("name") or "").strip()
+            c = (p.get("category") or "未分类产品").strip() or "未分类产品"
+            if not n:
+                continue
+            stt = (p.get("status") or "").strip()
+            tail = f"｜{stt}" if (stt and ("停运" in stt or "低活跃" in stt)) else ""
+            product_by_cat.setdefault(c, []).append({"name": f"{n}{tail}"})
+
+        product_nodes = []
+        for c, items in product_by_cat.items():
+            if items:
+                product_nodes.append({"name": c, "children": items[:30]})
+
+        sh_nodes = []
+        for x in (sec.get("topShareholders") or []):
+            nm = (x.get("name") or "").strip()
+            if not nm:
+                continue
+            rr = x.get("ratio")
+            note = (x.get("note") or "").strip()
+            txt = nm
+            if isinstance(rr, (int, float)):
+                txt += f"（持股{rr}%）"
+            if note:
+                txt += f"｜{note[:20]}"
+            sh_nodes.append({"name": txt})
+
+        comp_nodes = []
+        for x in (sec.get("competitors") or []):
+            nm = (x.get("name") or "").strip()
+            if not nm:
+                continue
+            rs = (x.get("reason") or "").strip()
+            comp_nodes.append({"name": f"{nm}{('｜'+rs[:22]) if rs else ''}"})
+
+        main_children = []
+        if industry:
+            main_children.append({"name": f"所属行业：{industry}"})
+        if by_line:
+            # 仅保留“收入结构（按业务）”主干，节点内带比例
+            main_children.append({"name": "收入结构（按业务）", "children": by_line})
+        if by_region:
+            main_children.append({"name": "收入结构（按地区）", "children": by_region})
+        if product_nodes:
+            main_children.append({"name": "产品", "children": product_nodes})
+        elif prod_rows:
+            main_children.append({"name": "产品", "children": prod_rows})
+        if sh_nodes:
+            main_children.append({"name": "前十大股东", "children": sh_nodes})
+        if comp_nodes:
+            main_children.append({"name": "行业竞争对手", "children": comp_nodes})
+
+        if main_children:
+            children.append({"name": "业务主线（结构化）", "children": main_children})
+
+    st = (ai_map or {}).get("strategyTimeline") or []
+    if st:
+        children.append({"name": "未来战略布局（时间线）", "children": [
+            {"name": f"{(x.get('date') or '时间待补')[:10]}｜{(x.get('event') or '')[:44]}"} for x in st[:14]
+        ]})
+
+    # 按要求移除“覆盖机构/最新研报快照/公告时间线/新闻动态”导图分支
+
+    return {"name": f"{name or code}({code})", "children": children}
+
+
+def _build_business_mindmap(code: str, name: str, business: dict, reports: list[dict], ai_map: dict | None = None, announcements: list[dict] | None = None, news: list[dict] | None = None, ai_sections: dict | None = None) -> str:
+    tree = _build_business_tree(code, name, business, reports, ai_map=ai_map, announcements=announcements, news=news, ai_sections=ai_sections)
+
+    lines = ["mindmap", f"  root(({tree['name']}))"]
+    for c in tree.get("children") or []:
+        lines.append(f"    {c['name']}")
+        for cc in c.get("children") or []:
+            lines.append(f"      {cc['name']}")
+    return "\n".join(lines)
+
+
+def _build_supply_chain_tree(code: str, name: str, business: dict, reports: list[dict] | None = None) -> dict:
+    reports = reports or []
+
+    schema = {
+        "type": "object",
+        "properties": {
+            "upstream": {"type": "array", "items": {"type": "string"}},
+            "midstream": {"type": "array", "items": {"type": "string"}},
+            "downstream": {"type": "array", "items": {"type": "string"}},
+        },
+        "required": ["upstream", "midstream", "downstream"],
+        "additionalProperties": False,
+    }
+    prompt = (
+        "你是产业链分析师。请基于公司分部与研报标题，输出该公司的供应链上下游结构。"
+        "要求：精确、分层、不要空话；每层5-10条。只返回JSON。"
+    )
+    payload = {
+        "code": code,
+        "name": name,
+        "business_segments": business.get("segments") or [],
+        "business_scope": business.get("scope") or "",
+        "report_titles": [r.get("title") for r in reports[:40] if r.get("title")],
+    }
+    ai = _call_openai_oauth_json(prompt, payload, schema) or {}
+
+    def norm_list(v):
+        out = []
+        for x in (v or []):
+            if isinstance(x, str) and x.strip():
+                out.append({"name": x.strip()[:60]})
+        return out[:12]
+
+    upstream = norm_list(ai.get("upstream"))
+    mid = norm_list(ai.get("midstream"))
+    downstream = norm_list(ai.get("downstream"))
+
+    if not (upstream and mid and downstream):
+        if code == "002558":
+            upstream = upstream or [{"name": "游戏引擎/开发工具"}, {"name": "美术外包与音频制作"}, {"name": "云服务/CDN"}]
+            mid = mid or [{"name": "研发立项与版本迭代"}, {"name": "发行与渠道运营"}, {"name": "商业化运营"}]
+            downstream = downstream or [{"name": "iOS/安卓应用商店用户"}, {"name": "PC端用户"}, {"name": "社区与IP合作方"}]
+        else:
+            upstream = upstream or [{"name": "技术与内容供应商"}, {"name": "云与基础设施服务"}]
+            mid = mid or [{"name": "公司核心研发/生产/运营"}, {"name": "产品化与质量管理"}, {"name": "市场与商业化运营"}]
+            downstream = downstream or [{"name": "渠道平台"}, {"name": "终端客户"}]
+
+    if len(mid) < 3:
+        for x in [{"name": "产品化与质量管理"}, {"name": "市场与商业化运营"}, {"name": "数据运营与增长"}]:
+            if len(mid) >= 4:
+                break
+            if x not in mid:
+                mid.append(x)
+
+    return {
+        "name": f"{name or code} 供应链上下游",
+        "children": [
+            {"name": "上游（投入要素）", "children": upstream},
+            {"name": "中游（公司核心环节）", "children": mid},
+            {"name": "下游（客户与变现）", "children": downstream},
+        ],
+    }
+
+
+def _fetch_company_announcements(code: str, page_size: int = 8) -> list[dict]:
+    url = "https://np-anotice-stock.eastmoney.com/api/security/ann"
+    params = {
+        "sr": -1,
+        "page_size": page_size,
+        "page_index": 1,
+        "ann_type": "A",
+        "client_source": "web",
+        "stock_list": code,
+    }
+    r = _rq_get(url, params=params, timeout=6, tries=2)
+    r.raise_for_status()
+    lst = (((r.json() or {}).get("data") or {}).get("list")) or []
+    out = []
+    for it in lst[:page_size]:
+        title = (it.get("title") or "").strip()
+        art = (it.get("art_code") or "").strip()
+        notice_date = str(it.get("notice_date") or "")[:10]
+        cols = [x.get("column_name") for x in (it.get("columns") or []) if x.get("column_name")]
+        url = f"https://data.eastmoney.com/notices/detail/{code}/{art}.html" if art else ""
+        out.append({
+            "title": title,
+            "date": notice_date,
+            "tags": cols[:3],
+            "url": url,
+            "source": "东方财富公告",
+        })
+    return out
+
+
+def _fetch_company_news(keyword: str, limit: int = 8) -> list[dict]:
+    url = "https://search-api-web.eastmoney.com/search/jsonp"
+    param = {
+        "uid": "",
+        "keyword": keyword,
+        "type": ["cmsArticleWebOld"],
+        "client": "web",
+        "clientType": "web",
+        "param": {
+            "cmsArticleWebOld": {
+                "searchScope": "default",
+                "sort": "default",
+                "pageIndex": 1,
+                "pageSize": limit,
+            }
+        },
+    }
+    r = _rq_get(url, {"cb": "jQueryStockNews", "param": json.dumps(param, ensure_ascii=False)}, timeout=6, tries=2)
+    r.raise_for_status()
+    text = r.text or ""
+    m = re.search(r"^jQueryStockNews\((.*)\)\s*$", text, flags=re.S)
+    if not m:
+        return []
+    obj = json.loads(m.group(1))
+    arr = ((((obj or {}).get("result") or {}).get("cmsArticleWebOld")) or [])
+    out = []
+    for it in arr[:limit]:
+        out.append({
+            "title": (it.get("title") or "").strip(),
+            "date": (it.get("date") or "")[:10],
+            "media": (it.get("mediaName") or "").strip(),
+            "summary": (it.get("content") or "").strip()[:120],
+            "url": (it.get("url") or "").strip(),
+            "image": (it.get("image") or "").strip(),
+            "source": "东方财富资讯",
+        })
+    return out
+
+
+@app.route("/stock-research")
+def stock_research_page():
+    return render_template("stock_research.html")
+
+
+@app.route("/oauth/openai/start")
+def oauth_openai_start():
+    cfg = _oauth_cfg()
+    if not (cfg["client_id"] and cfg["client_secret"] and cfg["redirect_uri"]):
+        return jsonify({
+            "ok": False,
+            "error": "OAuth配置不完整，请先设置 STOCK_RESEARCH_OPENAI_OAUTH_CLIENT_ID / CLIENT_SECRET / REDIRECT_URI",
+        }), 400
+
+    state = secrets.token_urlsafe(24)
+    OPENAI_OAUTH_STATE_CACHE[state] = time.time()
+    # 清理过期state
+    for k, ts in list(OPENAI_OAUTH_STATE_CACHE.items()):
+        if time.time() - ts > 900:
+            OPENAI_OAUTH_STATE_CACHE.pop(k, None)
+
+    qs = {
+        "response_type": "code",
+        "client_id": cfg["client_id"],
+        "redirect_uri": cfg["redirect_uri"],
+        "state": state,
+    }
+    if cfg.get("scope"):
+        qs["scope"] = cfg["scope"]
+
+    auth_url = f"{cfg['authorize_url']}?{urlencode(qs)}"
+    if (request.args.get("raw") or "").strip() == "1":
+        return jsonify({"ok": True, "authUrl": auth_url, "state": state})
+    return f"<html><body style='font-family: -apple-system, BlinkMacSystemFont, Segoe UI, sans-serif; padding: 24px;'>\n<h3>正在跳转 OpenAI 授权...</h3>\n<p>若未自动跳转，请点击：<a href='{auth_url}'>继续授权</a></p>\n<script>location.href={json.dumps(auth_url)};</script>\n</body></html>"
+
+
+@app.route("/oauth/openai/callback")
+def oauth_openai_callback():
+    cfg = _oauth_cfg()
+    code = (request.args.get("code") or "").strip()
+    state = (request.args.get("state") or "").strip()
+    err = (request.args.get("error") or "").strip()
+
+    if err:
+        return f"OAuth授权失败：{err}", 400
+    if not code:
+        return "缺少code", 400
+    if not state or state not in OPENAI_OAUTH_STATE_CACHE:
+        return "state校验失败", 400
+
+    OPENAI_OAUTH_STATE_CACHE.pop(state, None)
+
+    form = {
+        "grant_type": "authorization_code",
+        "code": code,
+        "redirect_uri": cfg["redirect_uri"],
+        "client_id": cfg["client_id"],
+        "client_secret": cfg["client_secret"],
+    }
+
+    try:
+        resp = requests.post(cfg["token_url"], data=form, timeout=30)
+        resp.raise_for_status()
+        obj = resp.json() or {}
+        expires_in = int(obj.get("expires_in") or 3600)
+        token_obj = {
+            **obj,
+            "expires_at": time.time() + max(60, expires_in),
+            "updated_at": dt.datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        }
+        _save_oauth_token_obj(token_obj)
+        access_token = (token_obj.get("access_token") or "").strip()
+        if access_token:
+            os.environ["STOCK_RESEARCH_OPENAI_OAUTH_TOKEN"] = access_token
+        return "OpenAI OAuth绑定成功。你可以返回研报页面继续使用。"
+    except Exception as e:
+        return f"Token交换失败：{e}", 500
+
+
+@app.route("/api/stock-research/oauth/status")
+def api_stock_research_oauth_status():
+    cfg = _oauth_cfg()
+    token_obj = _load_oauth_token_obj()
+    token = _get_openai_access_token()
+    return jsonify({
+        "ok": True,
+        "data": {
+            "configured": bool(cfg["client_id"] and cfg["client_secret"] and cfg["redirect_uri"]),
+            "authorized": bool(token),
+            "hasRefreshToken": bool((token_obj.get("refresh_token") or "").strip()),
+            "expiresAt": token_obj.get("expires_at"),
+            "updatedAt": token_obj.get("updated_at"),
+            "redirectUri": cfg["redirect_uri"],
+        },
+    })
+
+
+@app.route("/api/stock-research/oauth/refresh", methods=["POST"])
+def api_stock_research_oauth_refresh():
+    token_obj = _load_oauth_token_obj()
+    refreshed = _oauth_refresh_token(token_obj)
+    if not refreshed:
+        return jsonify({"ok": False, "error": "刷新失败，请重新走 /oauth/openai/start 绑定"}), 400
+    return jsonify({"ok": True, "data": {"updatedAt": refreshed.get("updated_at"), "expiresAt": refreshed.get("expires_at")}})
+
+
+@app.route("/api/stock-research/reports")
+def api_stock_research_reports():
+    code = (request.args.get("code") or "600519").strip()
+    days = int((request.args.get("days") or "730").strip() or 730)
+    page_size = int((request.args.get("page_size") or "20").strip() or 20)
+    if not code.isdigit() or len(code) != 6:
+        return jsonify({"ok": False, "error": "请输入6位A股代码"}), 400
+
+    try:
+        reports = _fetch_research_reports(code, days=days, page_size=page_size)
+        return jsonify({"ok": True, "data": {"code": code, "reports": reports}})
+    except Exception as e:
+        return jsonify({"ok": False, "error": f"研报抓取失败：{e}"}), 500
+
+
+@app.route("/api/stock-research/node-explain")
+def api_stock_research_node_explain():
+    code = (request.args.get("code") or "").strip()
+    node = (request.args.get("node") or "").strip()
+    parent = (request.args.get("parent") or "").strip()
+    path = (request.args.get("path") or "").strip()
+    evidence = (request.args.get("evidence") or "").strip()
+    if (not code) or (not code.isdigit()) or len(code) != 6:
+        return jsonify({"ok": False, "error": "请输入6位A股代码"}), 400
+    if not node:
+        return jsonify({"ok": False, "error": "缺少节点名称"}), 400
+
+    try:
+        reports = _fetch_research_reports(code, days=365, page_size=20)
+        business = _fetch_business_lines(code)
+        name = reports[0].get("stockName") if reports else code
+
+        clean_node = re.sub(r"（[^）]*）", "", node)
+        clean_node = re.sub(r"\([^\)]*\)", "", clean_node).strip()
+
+        schema = {
+            "type": "object",
+            "properties": {
+                "explanation": {"type": "string"},
+                "entityType": {"type": "string"},
+                "relationToCompany": {"type": "string"},
+                "businessRole": {"type": "string"},
+                "revenueLogic": {"type": "string"},
+                "competition": {"type": "string"},
+                "risks": {"type": "string"},
+                "keyPoints": {"type": "array", "items": {"type": "string"}},
+            },
+            "required": ["explanation", "keyPoints"],
+            "additionalProperties": False,
+        }
+        prompt = (
+            "你是A股公司业务研究员。任务是解释‘节点名词在该公司中的实际商业含义’，"
+            "不是解释图谱结构。\n"
+            "输出要求（必须具体，不要空话）：\n"
+            "1) explanation：120-220字，先回答‘它到底是什么’，再说明它在该公司业务链的位置。\n"
+            "2) entityType：节点类型（如 产品/品牌/子公司/门店/酒店/渠道/平台/项目/竞品）。\n"
+            "3) relationToCompany：与公司关系（自有/控股/参股/合作/竞品/上下游）。\n"
+            "4) businessRole：具体业务作用（获客、品牌展示、利润贡献、渠道延伸、供应链协同等）。\n"
+            "5) revenueLogic：怎么赚钱或如何影响收入利润（可写‘直接贡献有限、更多是品牌外溢’这类判断）。\n"
+            "6) competition：若是竞品，写清楚对标区间（价格带/客群/渠道）；不是竞品就写‘非竞品节点’。\n"
+            "7) risks：至少1条关键风险或不确定性。\n"
+            "8) keyPoints：4-6条，每条20字以上，必须可执行可理解。\n"
+            "9) 若节点是具体实体（如“茅台国际大酒店”），必须解释该实体本身，不得写成‘业务维度节点/结构权重’。\n"
+            "仅返回JSON。"
+        )
+        payload = {
+            "code": code,
+            "stock_name": name,
+            "node": node,
+            "node_clean": clean_node,
+            "node_parent": parent,
+            "node_path": path,
+            "node_evidence": evidence,
+            "industry": next((x.get("industry") for x in reports if x.get("industry")), ""),
+            "report_titles": [x.get("title") for x in (reports or [])[:12] if x.get("title")],
+            "business_segments": (business.get("segments") or [])[:10],
+        }
+        ai = _call_openai_oauth_json(prompt, payload, schema) or {}
+        exp = (ai.get("explanation") or "").strip()
+        points = [str(x).strip() for x in (ai.get("keyPoints") or []) if str(x).strip()][:8]
+        entity_type = (ai.get("entityType") or "").strip()
+        relation = (ai.get("relationToCompany") or "").strip()
+        role = (ai.get("businessRole") or "").strip()
+        revenue_logic = (ai.get("revenueLogic") or "").strip()
+        competition = (ai.get("competition") or "").strip()
+        risks = (ai.get("risks") or "").strip()
+
+        if not exp:
+            kind = "业务实体"
+            if any(k in clean_node for k in ["酒店", "大酒店"]):
+                kind = "酒店业务实体"
+            elif any(k in clean_node for k in ["APP", "平台", "小程序"]):
+                kind = "数字化渠道"
+            elif any(k in clean_node for k in ["酒", "产品", "系列"]):
+                kind = "产品/品牌单元"
+            exp = f"{name}（{code}）中的“{node}”更接近一个{kind}，应从实体属性、与公司的关系、盈利逻辑与风险四个维度理解，而不是只看图谱层级。"
+        if len(points) < 4:
+            fallback_points = [
+                f"节点类型判断：{entity_type or '需结合上下文二次判定'}。",
+                f"与公司关系：{relation or '通常为自有业务、合作节点或竞品节点之一'}。",
+                f"业务作用：{role or '可能承担品牌、渠道、获客或利润补充作用'}。",
+                f"收入逻辑：{revenue_logic or '需区分直接营收贡献与品牌外溢的间接贡献'}。",
+                f"核心风险：{risks or '需关注需求波动、竞争加剧和执行偏差等风险'}。",
+            ]
+            points = (points + fallback_points)[:6]
+
+        return jsonify({
+            "ok": True,
+            "data": {
+                "code": code,
+                "name": name,
+                "node": node,
+                "explanation": exp,
+                "entityType": entity_type,
+                "relationToCompany": relation,
+                "businessRole": role,
+                "revenueLogic": revenue_logic,
+                "competition": competition,
+                "risks": risks,
+                "keyPoints": points,
+                "ai": {"used": bool(ai), "runtime": dict(AI_RUNTIME_STATUS)},
+            },
+        })
+    except Exception as e:
+        return jsonify({"ok": False, "error": f"节点解释失败：{e}"}), 500
+
+
+@app.route("/api/stock-research/analysis")
+def api_stock_research_analysis():
+    code = (request.args.get("code") or "600519").strip()
+    days = int((request.args.get("days") or "730").strip() or 730)
+    if not code.isdigit() or len(code) != 6:
+        return jsonify({"ok": False, "error": "请输入6位A股代码"}), 400
+
+    try:
+        reports = _fetch_research_reports(code, days=days, page_size=30)
+        business = _fetch_business_lines(code)
+        analysis = _generate_report_analysis(code, reports, business)
+        name = reports[0].get("stockName") if reports else code
+
+        ai_raw = _ai_extract_business_map(code, name or code, reports, business)
+        ai_map = _normalize_ai_map(ai_raw)
+        ai_diag = {
+            "rawKeys": sorted(list((ai_raw or {}).keys())) if isinstance(ai_raw, dict) else [],
+            "normalized": {
+                "summary": bool((ai_map.get("mainBusinessSummary") or "").strip()),
+                "businessLines": len(ai_map.get("businessLines") or []),
+                "products": len(ai_map.get("canonicalProducts") or []),
+                "strategyTimeline": len(ai_map.get("strategyTimeline") or []),
+            },
+        }
+
+        announcements = []
+        news = []
+        try:
+            announcements = _fetch_company_announcements(code, page_size=14)
+        except Exception:
+            announcements = []
+        try:
+            news = _fetch_company_news((name or code), limit=14)
+        except Exception:
+            news = []
+
+        ai_map, quality_audit = _enrich_company_info(code, ai_map, business, reports, announcements, news)
+        ai_sections = _ai_structured_company_sections(code, name or code, reports, business, announcements=announcements, news=news)
+        display_products = _build_display_products(code, name or code, ai_sections or {}, ai_map or {}, reports or [])
+        ai_sections = {**(ai_sections or {}), "products": display_products}
+
+        mindmap = _build_business_mindmap(code, name or code, business, reports, ai_map=ai_map, announcements=announcements, news=news, ai_sections=ai_sections)
+        tree = _build_business_tree(code, name or code, business, reports, ai_map=ai_map, announcements=announcements, news=news, ai_sections=ai_sections)
+        supply_chain_tree = _build_supply_chain_tree(code, name or code, business, reports=reports)
+        node_evidence_map = _build_node_evidence_map(tree, reports, business, ai_map=ai_map)
+
+        company_lines = (ai_map or {}).get("businessLines") or []
+
+        ai_used = bool((ai_map.get("mainBusinessSummary") or "").strip() or (ai_map.get("businessLines") or []) or (ai_map.get("canonicalProducts") or []) or (ai_map.get("strategyTimeline") or []))
+        ai_runtime = dict(AI_RUNTIME_STATUS)
+        pa = (ai_sections or {}).get("productAudit") or {}
+        sec_products = (ai_sections or {}).get("products") or []
+        uncategorized_cnt = sum(1 for x in sec_products if (x.get("category") or "").strip() in {"", "AI未分类", "其他产品", "未分类产品"})
+        ai_failed = bool(
+            (not ai_used)
+            or (not pa.get("usedAI"))
+            or (uncategorized_cnt > 0)
+        )
+        ai_fail_msg = ""
+        if ai_failed:
+            ai_fail_msg = (ai_runtime.get("last_error") or "AI调用未命中，本次结果包含本地兜底内容").strip()
+            if (not pa.get("usedAI")) or pa.get("fallbackUsed"):
+                ai_fail_msg = (ai_fail_msg + "；产品AI复审未成功").strip("；")
+
+        return jsonify({
+            "ok": True,
+            "data": {
+                "code": code,
+                "name": name,
+                "analysis": analysis,
+                "business": business,
+                "mindmap": mindmap,
+                "tree": tree,
+                "supplyChainTree": supply_chain_tree,
+                "nodeEvidenceMap": node_evidence_map,
+                "companyInfo": {
+                    "mainBusinessSummary": ((ai_map or {}).get("mainBusinessSummary") or "").strip(),
+                    "businessLines": company_lines,
+                    "products": [{
+                        "name": (x.get("name") or "").strip(),
+                        "line": (x.get("category") or "").strip(),
+                        "category": (x.get("category") or "").strip(),
+                        "type": (x.get("tier") or "").strip(),
+                        "status": (x.get("status") or "").strip(),
+                        "coreScore": (5 if (x.get("tier") or "").strip() == "核心产品" else (3 if (x.get("tier") or "").strip() == "次核心产品" else 1)),
+                        "mention_count": int(float(x.get("mention_count") or 0)),
+                        "confidence": float(x.get("confidence") or 0.9),
+                    } for x in (display_products or [])],
+                    "strategyTimeline": (ai_map or {}).get("strategyTimeline") or [],
+                },
+                "updates": {
+                    "announcements": announcements,
+                    "news": news,
+                },
+                "ai": {
+                    "enabled": bool(_get_openai_access_token()),
+                    "provider": ("qwen-compatible" if ((os.getenv("STOCK_RESEARCH_OPENAI_BASE_URL") or "").find("dashscope") >= 0 or (os.getenv("STOCK_RESEARCH_OPENAI_MODEL") or "qwen-plus").startswith("qwen")) else "openai-backend"),
+                    "used": ai_used,
+                    "required": True,
+                    "failed": ai_failed,
+                    "failureMessage": ai_fail_msg if ai_failed else "",
+                    "model": (os.getenv("STOCK_RESEARCH_OPENAI_MODEL") or "qwen-plus"),
+                    "diag": ai_diag,
+                    "qualityAudit": quality_audit,
+                    "productAudit": {**((ai_sections or {}).get("productAudit") or {}), "uncategorizedCount": uncategorized_cnt},
+                    "runtime": ai_runtime,
+                },
+                "warnings": ([f"AI调用失败：{ai_fail_msg}"] if ai_failed else []) + (["产品AI复审回退到规则补齐"] if pa.get("fallbackUsed") else []) + ([f"产品存在未分类项：{uncategorized_cnt}"] if uncategorized_cnt > 0 else []),
+                "sources": {
+                    "reports": sorted(list({x.get('source','') for x in reports if x.get('source')})),
+                    "business": business.get("source") or [],
+                },
+            },
+        })
+    except Exception as e:
+        return jsonify({"ok": False, "error": f"分析生成失败：{e}"}), 500
 
 
 def setup_scheduler():

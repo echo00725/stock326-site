@@ -1,0 +1,655 @@
+<!doctype html>
+<html lang="zh-CN"><head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>股票行业研报分析</title>
+  <link rel="stylesheet" href="/static/style.css" />
+  <link rel="stylesheet" href="/static/dark.css" />
+  <script src="https://cdn.jsdelivr.net/npm/echarts@5/dist/echarts.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.min.js"></script>
+</head>
+<body>
+<main class="container">
+  <h1>📈 股票行业研报分析</h1>
+  <p class="sub">汇总权威券商/研究机构研报，自动生成观点分析与业务线思维导图（本地演示版）。</p>
+
+  <section class="card" style="display:flex;gap:10px;flex-wrap:wrap;align-items:center;">
+    <input id="code" placeholder="输入6位股票代码，如 600519" value="600519" style="min-width:220px;padding:10px;border-radius:10px;border:1px solid #ccc" />
+    <label class="sub">范围
+      <select id="days" style="margin-left:6px;padding:8px;border-radius:8px;border:1px solid #ccc;">
+        <option value="365">近1年</option>
+        <option value="730" selected>近2年</option>
+        <option value="1095">近3年</option>
+      </select>
+    </label>
+    <label class="sub">样本
+      <select id="page-size" style="margin-left:6px;padding:8px;border-radius:8px;border:1px solid #ccc;">
+        <option value="30">30</option>
+        <option value="50" selected>50</option>
+        <option value="100">100</option>
+      </select>
+    </label>
+    <button id="run" class="btn">生成研报分析</button>
+    <span id="run-status" class="sub" style="min-width:180px;">待运行</span>
+    <a class="btn secondary" href="/">返回目录</a>
+  </section>
+
+  <section class="card">
+    <h2>1) 权威研报信息（近2年）</h2>
+    <div id="reports-meta" class="sub">待加载</div>
+    <div id="reports-source" class="sub"></div>
+    <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:center;margin-top:8px;">
+      <input id="report-filter" placeholder="筛选：机构/标题/评级" style="min-width:260px;padding:8px;border-radius:8px;border:1px solid #334155;background:#0b1324;color:#e2e8f0;" />
+      <button id="export-reports" class="btn secondary">导出研报CSV</button>
+    </div>
+    <div style="overflow:auto;max-height:420px;margin-top:8px;">
+      <table style="width:100%;border-collapse:collapse;font-size:14px;">
+        <thead><tr><th align="left">日期</th><th align="left">机构</th><th align="left">标题</th><th align="left">评级</th><th align="left">目标价</th><th align="left">原文</th></tr></thead>
+        <tbody id="reports-body"></tbody>
+      </table>
+    </div>
+  </section>
+
+  <section class="card">
+    <h2>2) 公司主营业务深度分析（AI+多源）</h2>
+    <div id="mainbiz-summary" class="sub" style="margin-bottom:8px;"></div>
+    <ul id="biz-lines"></ul>
+    <h3 style="margin-top:10px;font-size:16px;">核心产品清单（尽量找全）</h3>
+    <div id="product-cards" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));gap:10px;"></div>
+    <h3 style="margin-top:10px;font-size:16px;">未来战略布局（含时间点）</h3>
+    <div id="strategy-list" style="display:grid;gap:8px;"></div>
+    <ul id="analysis-list" style="margin-top:10px;"></ul>
+    <div id="analysis-note" class="sub"></div>
+  </section>
+
+  <section class="card">
+    <h2>3) 公司业务线思维导图（增强版）</h2>
+    <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:center;margin-bottom:10px;">
+      <label>布局
+        <select id="layout" style="margin-left:6px;padding:6px 8px;border-radius:8px;border:1px solid #ccc;">
+          <option value="LR">横向（推荐）</option>
+          <option value="TB">纵向</option>
+        </select>
+      </label>
+      <label>默认展开层级
+        <input id="depth" type="range" min="1" max="7" value="3" style="vertical-align:middle;" />
+        <span id="depth-val">3</span>
+      </label>
+      <input id="node-search" placeholder="搜索节点关键词" style="min-width:220px;padding:8px;border-radius:8px;border:1px solid #ccc" />
+      <button id="fit-tree" class="btn secondary">自适应视图</button>
+      <button id="expand-tree" class="btn secondary">全部展开</button>
+      <button id="collapse-tree" class="btn secondary">折叠到主干</button>
+      <button id="toggle-tree" class="btn secondary">隐藏导图</button>
+      <button id="export-tree" class="btn secondary">导出PNG</button>
+    </div>
+    <div id="tree-stats" class="sub" style="margin-bottom:8px;color:#cbd5e1;"></div>
+    <div id="tree-wrap" style="position:relative;">
+      <div id="tree-chart" style="width:100%;height:640px;border-radius:14px;background:radial-gradient(circle at 30% 20%, #1e293b 0%, #0b1022 45%, #050814 100%);box-shadow:inset 0 0 80px rgba(96,165,250,.08), 0 12px 30px rgba(2,6,23,.45);"></div>
+      <div id="node-menu" style="display:none;position:absolute;z-index:9;background:rgba(2,6,23,.95);border:1px solid rgba(148,163,184,.35);border-radius:10px;padding:8px;min-width:120px;">
+        <button id="menu-collapse" class="btn secondary" style="width:100%;margin-bottom:6px;padding:6px 8px;">收缩</button>
+        <button id="menu-explain" class="btn secondary" style="width:100%;padding:6px 8px;">解释</button>
+      </div>
+    </div>
+    <div id="evidence-drawer" style="display:none;margin-top:12px;border:1px solid rgba(148,163,184,.28);border-radius:12px;background:rgba(2,6,23,.86);padding:12px;">
+      <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;">
+        <b id="drawer-title" style="color:#e2e8f0;">节点证据</b>
+        <button id="drawer-close" class="btn secondary" style="padding:6px 10px;">关闭</button>
+      </div>
+      <div id="drawer-list" style="margin-top:10px;display:grid;gap:8px;"></div>
+    </div>
+    <div id="explain-drawer" style="display:none;margin-top:12px;border:1px solid rgba(148,163,184,.28);border-radius:12px;background:rgba(2,6,23,.86);padding:12px;">
+      <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;">
+        <b id="explain-title" style="color:#e2e8f0;">节点解释</b>
+        <button id="explain-close" class="btn secondary" style="padding:6px 10px;">关闭</button>
+      </div>
+      <div id="explain-body" style="margin-top:10px;display:grid;gap:8px;color:#cbd5e1;"></div>
+    </div>
+    <details style="margin-top:8px"><summary>Mermaid源码（备用）</summary><pre id="mindmap-src" style="white-space:pre-wrap"></pre></details>
+  </section>
+
+  <section class="card">
+    <h2>4) 供应链上下游思维导图</h2>
+    <div id="supply-tree-chart" style="width:100%;height:520px;border-radius:14px;background:radial-gradient(circle at 30% 20%, #1e293b 0%, #0b1022 45%, #050814 100%);box-shadow:inset 0 0 80px rgba(96,165,250,.08), 0 12px 30px rgba(2,6,23,.45);"></div>
+  </section>
+
+  <section class="card">
+    <h2>5) 公司新闻与公告</h2>
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;">
+      <div>
+        <h3 style="font-size:15px;">最新公告</h3>
+        <div id="ann-list" style="display:grid;gap:8px;"></div>
+      </div>
+      <div>
+        <h3 style="font-size:15px;">最新新闻</h3>
+        <div id="news-list" style="display:grid;gap:8px;"></div>
+      </div>
+    </div>
+  </section>
+</main>
+
+<script>
+  const runBtn = document.getElementById('run');
+  const codeInput = document.getElementById('code');
+  const daysSel = document.getElementById('days');
+  const pageSizeSel = document.getElementById('page-size');
+  const runStatus = document.getElementById('run-status');
+  const reportFilterInput = document.getElementById('report-filter');
+  const exportReportsBtn = document.getElementById('export-reports');
+  const layoutSel = document.getElementById('layout');
+  const depthRange = document.getElementById('depth');
+  const depthVal = document.getElementById('depth-val');
+  const searchInput = document.getElementById('node-search');
+  const fitBtn = document.getElementById('fit-tree');
+  const expandBtn = document.getElementById('expand-tree');
+  const collapseBtn = document.getElementById('collapse-tree');
+  const toggleTreeBtn = document.getElementById('toggle-tree');
+  const exportBtn = document.getElementById('export-tree');
+  const drawer = document.getElementById('evidence-drawer');
+  const drawerTitle = document.getElementById('drawer-title');
+  const drawerList = document.getElementById('drawer-list');
+  const drawerClose = document.getElementById('drawer-close');
+  const nodeMenu = document.getElementById('node-menu');
+  const menuCollapseBtn = document.getElementById('menu-collapse');
+  const menuExplainBtn = document.getElementById('menu-explain');
+  const explainDrawer = document.getElementById('explain-drawer');
+  const explainTitle = document.getElementById('explain-title');
+  const explainBody = document.getElementById('explain-body');
+  const explainClose = document.getElementById('explain-close');
+
+  let chart = null;
+  let supplyChart = null;
+  let currentTree = null;
+  let nodeEvidenceMap = {};
+  let reportsCache = [];
+  let collapsedNodeIds = new Set();
+  let activeNodeRef = null;
+
+  function escapeHtml(v) {
+    return String(v ?? '').replace(/[&<>"']/g, (m) => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m]));
+  }
+
+  function renderReportsTable() {
+    const keyword = (reportFilterInput.value || '').trim().toLowerCase();
+    const list = !keyword ? reportsCache : reportsCache.filter(x => {
+      const text = `${x.publishDate || ''} ${x.orgName || ''} ${x.title || ''} ${x.rating || ''}`.toLowerCase();
+      return text.includes(keyword);
+    });
+    document.getElementById('reports-meta').textContent = `共 ${reportsCache.length} 篇，筛选后 ${list.length} 篇（按日期降序）`;
+    const body = document.getElementById('reports-body');
+    body.innerHTML = list.map(x => `
+      <tr>
+        <td>${escapeHtml(x.publishDate || '')}</td>
+        <td>${escapeHtml(x.orgName || '')}</td>
+        <td>${escapeHtml(x.title || '')}</td>
+        <td>${escapeHtml(x.rating || '')}</td>
+        <td>${x.targetPrice ? Number(x.targetPrice).toFixed(2) : '-'}</td>
+        <td>${x.pdf ? `<a href="${x.pdf}" target="_blank">PDF</a>` : '-'}</td>
+      </tr>
+    `).join('');
+  }
+
+  function openEvidenceDrawer(nodeName) {
+    const list = nodeEvidenceMap[nodeName] || [];
+    drawerTitle.textContent = `节点证据：${nodeName}`;
+    drawer.style.display = 'block';
+    if (!list.length) {
+      drawerList.innerHTML = '<div style="color:#94a3b8;">暂无可展示证据（可继续补充公告/年报/官网数据源）</div>';
+      return;
+    }
+    drawerList.innerHTML = list.map((x, idx) => `
+      <div style="border:1px solid rgba(148,163,184,.25);background:rgba(15,23,42,.72);border-radius:10px;padding:10px;">
+        <div style="color:#e2e8f0;font-weight:600;">${idx + 1}. ${x.source || '未知来源'} ${x.date ? `· ${x.date}` : ''} ${x.score ? `· 置信度${Number(x.score).toFixed(2)}` : ''}</div>
+        <div style="color:#cbd5e1;margin-top:6px;line-height:1.5;">${x.snippet || ''}</div>
+        ${x.url ? `<a href="${x.url}" target="_blank" style="display:inline-block;margin-top:6px;color:#7dd3fc;">查看原文</a>` : ''}
+      </div>
+    `).join('');
+  }
+
+  function showNodeMenu(params) {
+    if (!params?.data?.id) return;
+    activeNodeRef = {
+      id: params.data.id,
+      name: params.data.name || '',
+      depth: params.data.depth ?? null,
+      parentName: params.data.parentName || '',
+      branchPath: params.data.branchPath || ''
+    };
+    menuCollapseBtn.textContent = collapsedNodeIds.has(activeNodeRef.id) ? '展开' : '收缩';
+    const ev = params?.event?.event;
+    const wrap = document.getElementById('tree-wrap').getBoundingClientRect();
+    const x = Math.max(8, Math.min((ev?.offsetX || 30), wrap.width - 130));
+    const y = Math.max(8, Math.min((ev?.offsetY || 30), wrap.height - 90));
+    nodeMenu.style.left = `${x}px`;
+    nodeMenu.style.top = `${y}px`;
+    nodeMenu.style.display = 'block';
+  }
+
+  function toggleNodeCollapse() {
+    if (!activeNodeRef?.id) return;
+    if (collapsedNodeIds.has(activeNodeRef.id)) collapsedNodeIds.delete(activeNodeRef.id);
+    else collapsedNodeIds.add(activeNodeRef.id);
+    nodeMenu.style.display = 'none';
+    renderTree();
+  }
+
+  async function explainNode() {
+    if (!activeNodeRef?.name) return;
+    nodeMenu.style.display = 'none';
+    explainDrawer.style.display = 'block';
+    explainTitle.textContent = `节点解释：${activeNodeRef.name}`;
+    explainBody.innerHTML = '<div style="color:#94a3b8;">正在生成解释...</div>';
+    try {
+      const code = codeInput.value.trim();
+      const evidenceText = (nodeEvidenceMap[activeNodeRef.name] || [])
+        .slice(0, 3)
+        .map(x => (x?.snippet || x?.source || '').trim())
+        .filter(Boolean)
+        .join('；');
+      const qs = new URLSearchParams({
+        code,
+        node: activeNodeRef.name || '',
+        parent: activeNodeRef.parentName || '',
+        path: activeNodeRef.branchPath || '',
+        evidence: evidenceText
+      });
+      const resp = await fetch(`/api/stock-research/node-explain?${qs.toString()}`).then(r => r.json());
+      if (!resp.ok) throw new Error(resp.error || '解释生成失败');
+      const d = resp.data || {};
+      const pts = (d.keyPoints || []).map(x => `<li style="margin:4px 0;line-height:1.6;">${escapeHtml(x)}</li>`).join('');
+      const kv = (label, v) => v ? `<div style="margin-top:8px;"><b style="color:#e2e8f0;">${label}</b><div style="margin-top:4px;line-height:1.62;">${escapeHtml(v)}</div></div>` : '';
+      explainBody.innerHTML = `
+        <div style="line-height:1.72;font-size:15px;color:#e2e8f0;">${escapeHtml(d.explanation || '')}</div>
+        <div style="margin-top:10px;display:grid;gap:6px;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));">
+          ${d.entityType ? `<div style="padding:8px 10px;border:1px solid rgba(148,163,184,.28);border-radius:8px;"><b>节点类型</b><div style="margin-top:4px;color:#cbd5e1;">${escapeHtml(d.entityType)}</div></div>` : ''}
+          ${d.relationToCompany ? `<div style="padding:8px 10px;border:1px solid rgba(148,163,184,.28);border-radius:8px;"><b>与公司关系</b><div style="margin-top:4px;color:#cbd5e1;">${escapeHtml(d.relationToCompany)}</div></div>` : ''}
+        </div>
+        ${kv('业务作用（它在公司里干什么）', d.businessRole)}
+        ${kv('收入/利润影响（怎么赚钱）', d.revenueLogic)}
+        ${kv('竞争定位', d.competition)}
+        ${kv('关键风险', d.risks)}
+        ${pts ? `<div style="margin-top:10px;"><b style="color:#e2e8f0;">详细要点</b><ul style="margin-top:6px;padding-left:18px;">${pts}</ul></div>` : ''}
+      `;
+    } catch (e) {
+      explainBody.innerHTML = `<div style="color:#fca5a5;">${escapeHtml(e.message || String(e))}</div>`;
+    }
+  }
+
+  function colorByDepth(depth = 0) {
+    const palette = ['#2563eb', '#0ea5e9', '#14b8a6', '#22c55e', '#f59e0b', '#ef4444'];
+    return palette[Math.min(depth, palette.length - 1)];
+  }
+
+  function treeStats(node) {
+    let total = 0, leaf = 0, maxDepth = 0;
+    function dfs(n, d) {
+      if (!n) return;
+      total += 1;
+      maxDepth = Math.max(maxDepth, d);
+      const ch = n.children || [];
+      if (!ch.length) leaf += 1;
+      ch.forEach(c => dfs(c, d + 1));
+    }
+    dfs(node, 0);
+    return { total, leaf, maxDepth };
+  }
+
+  function markSearch(node, keyword, depth = 0) {
+    if (!node) return;
+    const hit = keyword && String(node.name || '').toLowerCase().includes(keyword.toLowerCase());
+    node.itemStyle = {
+      color: hit ? '#dc2626' : colorByDepth(depth),
+      borderColor: hit ? '#b91c1c' : '#ffffff',
+      borderWidth: hit ? 2 : 1
+    };
+    node.label = {
+      color: hit ? '#7f1d1d' : '#0f172a',
+      fontWeight: hit ? 'bold' : 'normal',
+      fontSize: hit ? 13 : 12,
+      backgroundColor: hit ? 'rgba(254,226,226,.9)' : 'rgba(255,255,255,.75)',
+      borderRadius: 6,
+      padding: [2, 6],
+      overflow: 'break'
+    };
+    (node.children || []).forEach(c => markSearch(c, keyword, depth + 1));
+  }
+
+  function flattenTreeToGraph(root, maxDepth = 2, keyword = '', collapsed = new Set()) {
+    const nodes = [];
+    const links = [];
+
+    function walk(node, depth = 0, parentId = null, path = 'root', index = 0, parentName = '', ancestors = []) {
+      if (!node || depth > maxDepth) return;
+      const name = String(node.name || '');
+      const id = `${path}/${index}:${name}`;
+      const hit = keyword && name.toLowerCase().includes(keyword.toLowerCase());
+      const baseSize = depth === 0 ? 42 : depth === 1 ? 24 : depth === 2 ? 17 : 12;
+      const color = hit ? '#fb7185' : depth === 0 ? '#f8fafc' : depth === 1 ? '#93c5fd' : depth === 2 ? '#5eead4' : '#c4b5fd';
+
+      const children = node.children || [];
+      const isCollapsed = collapsed.has(id);
+      const branchPath = [...ancestors, name].filter(Boolean).join(' > ');
+      nodes.push({
+        id,
+        name: node.name,
+        depth,
+        parentName,
+        branchPath,
+        hasChildren: children.length > 0,
+        collapsed: isCollapsed,
+        symbolSize: hit ? baseSize + 4 : baseSize,
+        draggable: true,
+        itemStyle: {
+          color,
+          shadowBlur: hit ? 24 : 14,
+          shadowColor: hit ? 'rgba(251,113,133,.95)' : 'rgba(96,165,250,.65)',
+          borderColor: hit ? '#be123c' : 'rgba(255,255,255,.7)',
+          borderWidth: hit ? 2.5 : 1
+        },
+        label: {
+          show: true,
+          color: hit ? '#ffe4e6' : '#e2e8f0',
+          fontSize: depth === 0 ? 15 : depth === 1 ? 13 : 12,
+          fontWeight: hit || depth <= 1 ? 'bold' : 'normal',
+          backgroundColor: hit ? 'rgba(157,23,77,.35)' : 'rgba(15,23,42,.45)',
+          borderRadius: 8,
+          padding: [3, 7]
+        }
+      });
+
+      if (parentId) {
+        links.push({
+          source: parentId,
+          target: id,
+          lineStyle: {
+            width: depth === 1 ? 2.0 : 1.3,
+            curveness: 0.18,
+            color: hit ? 'rgba(251,113,133,.95)' : 'rgba(125,211,252,.42)'
+          }
+        });
+      }
+
+      if (!isCollapsed) {
+        children.forEach((c, i) => walk(c, depth + 1, id, id, i, name, [...ancestors, name]));
+      }
+    }
+
+    walk(root, 0, null, 'root', 0);
+    return { nodes, links };
+  }
+
+  function renderSupplyTree(supplyTree) {
+    if (!supplyTree) return;
+    if (!supplyChart) {
+      supplyChart = echarts.init(document.getElementById('supply-tree-chart'));
+      window.addEventListener('resize', () => supplyChart && supplyChart.resize());
+    }
+    supplyChart.setOption({
+      tooltip: { trigger: 'item', triggerOn: 'mousemove' },
+      series: [{
+        type: 'tree',
+        data: [supplyTree],
+        top: '5%', left: '8%', bottom: '5%', right: '28%',
+        symbolSize: 10,
+        orient: 'LR',
+        expandAndCollapse: true,
+        initialTreeDepth: 3,
+        lineStyle: { color: '#7dd3fc', width: 1.2, curveness: 0.5 },
+        label: { color: '#e2e8f0', backgroundColor: 'rgba(15,23,42,.45)', borderRadius: 6, padding: [2,6] },
+      }]
+    }, true);
+  }
+
+  function renderTree() {
+    if (!currentTree) return;
+    nodeMenu.style.display = 'none';
+    const keyword = searchInput.value.trim();
+    const depth = Number(depthRange.value || 3);
+    depthVal.textContent = String(depth);
+
+    const { nodes, links } = flattenTreeToGraph(currentTree, depth, keyword, collapsedNodeIds);
+
+    if (!chart) {
+      chart = echarts.init(document.getElementById('tree-chart'));
+      window.addEventListener('resize', () => chart && chart.resize());
+      chart.on('click', (params) => {
+        if (params?.data?.id) showNodeMenu(params);
+      });
+    }
+
+    chart.setOption({
+      backgroundColor: 'transparent',
+      tooltip: {
+        trigger: 'item',
+        formatter: (p) => {
+          const n = p.data || {};
+          return `<b>${n.name || ''}</b><br/>层级：${n.depth ?? '-'}${keyword ? `<br/>搜索：${keyword}` : ''}`;
+        }
+      },
+      series: [{
+        type: 'graph',
+        layout: layoutSel.value === 'TB' ? 'circular' : 'force',
+        circular: { rotateLabel: true },
+        force: {
+          initLayout: 'circular',
+          repulsion: 460,
+          edgeLength: [80, 180],
+          gravity: 0.05,
+          friction: 0.15
+        },
+        roam: true,
+        data: nodes,
+        links,
+        lineStyle: {
+          opacity: 0.9,
+          width: 1.3,
+          curveness: 0.16
+        },
+        emphasis: {
+          focus: 'adjacency',
+          lineStyle: { width: 2.2 }
+        },
+        label: { position: 'right' },
+        edgeSymbol: ['none', 'none'],
+        animationDuration: 700,
+        animationDurationUpdate: 550
+      }]
+    }, true);
+  }
+
+  async function loadAll() {
+    const code = codeInput.value.trim();
+    if (!/^\d{6}$/.test(code)) { alert('请输入6位股票代码'); return; }
+
+    runBtn.disabled = true;
+    runBtn.textContent = '生成中...';
+    runStatus.textContent = '正在拉取研报与分析...';
+
+    try {
+      const days = Number(daysSel.value || 730);
+      const pageSize = Number(pageSizeSel.value || 50);
+      const [reportResp, analysisResp] = await Promise.all([
+        fetch(`/api/stock-research/reports?code=${code}&days=${days}&page_size=${pageSize}`).then(r => r.json()),
+        fetch(`/api/stock-research/analysis?code=${code}&days=${days}`).then(r => r.json()),
+      ]);
+
+      if (!reportResp.ok) throw new Error(reportResp.error || '研报读取失败');
+      if (!analysisResp.ok) throw new Error(analysisResp.error || '分析生成失败');
+
+      reportsCache = reportResp.data.reports || [];
+      document.getElementById('reports-source').textContent = `研报来源：${[...new Set(reportsCache.map(x=>x.source).filter(Boolean))].join(' / ') || '暂无'}`;
+      renderReportsTable();
+
+      runStatus.textContent = '数据加载完成';
+      const a = analysisResp.data.analysis || {};
+      const companyInfo = analysisResp.data.companyInfo || {};
+      document.getElementById('analysis-list').innerHTML = (a.summary || []).map(s => `<li>${s}</li>`).join('');
+      document.getElementById('analysis-note').textContent = a.disclaimer || '';
+
+      const aiMetaForSummary = analysisResp.data.ai || {};
+      document.getElementById('mainbiz-summary').textContent = aiMetaForSummary.failed
+        ? `⚠️ AI调用失败：${aiMetaForSummary.failureMessage || '请检查Token/配额后重试'}。以下内容可能包含本地兜底结果。`
+        : (companyInfo.mainBusinessSummary || '暂无主营业务总结（可重试以增强）');
+      document.getElementById('biz-lines').innerHTML = (companyInfo.businessLines || []).slice(0,16).map(x =>
+        `<li>${x.name || ''} ｜ ${x.subLine || '细分待补'} ｜ 置信度${Number(x.confidence || 0).toFixed(2)}</li>`
+      ).join('');
+      const productsSorted = (companyInfo.products || []).slice().sort((a,b)=> Number(b.coreScore || 0) - Number(a.coreScore || 0)).slice(0,120);
+      const grouped = {};
+      for (const p of productsSorted) {
+        const cat = (p.category || p.line || '').trim();
+        if (!cat) continue;
+        if (!grouped[cat]) grouped[cat] = [];
+        grouped[cat].push(p);
+      }
+      const groupNames = Object.keys(grouped).sort((a,b)=> grouped[b].length - grouped[a].length);
+      if (!groupNames.length) {
+        document.getElementById('product-cards').innerHTML = '<div class="sub">暂无可展示产品（AI分类结果为空，请检查AI调用状态）</div>';
+      } else {
+        document.getElementById('product-cards').innerHTML = groupNames.map(cat => {
+        const cards = grouped[cat].map(p => {
+          const score = Number(p.coreScore || 0);
+          const level = score >= 4 ? '核心' : (score >= 2 ? '次核心' : '补充');
+          const statusTxt = String(p.status || '');
+          const showStatus = statusTxt && /停运|低活跃/.test(statusTxt);
+          return `
+            <div style="border:1px solid rgba(148,163,184,.25);background:rgba(15,23,42,.65);border-radius:10px;padding:10px;">
+              <div style="display:flex;justify-content:space-between;gap:8px;align-items:center;">
+                <div style="color:#e2e8f0;font-weight:700;">${p.name || ''}</div>
+                <div style="font-size:11px;color:${score>=4?'#fbbf24':score>=2?'#93c5fd':'#94a3b8'};">${level}</div>
+              </div>
+              ${showStatus ? `<div style="color:#fca5a5;font-size:12px;margin-top:4px;">状态：${statusTxt}</div>` : ''}
+              ${(p.dau || p.revenue) ? `<div style="color:#cbd5e1;font-size:12px;margin-top:4px;">${p.dau ? `DAU：${p.dau}` : ''}${(p.dau && p.revenue) ? ' ｜ ' : ''}${p.revenue ? `流水：${p.revenue}` : ''}</div>` : ''}
+              <div style="color:#94a3b8;font-size:12px;margin-top:4px;">置信度${Number(p.confidence || 0).toFixed(2)}</div>
+            </div>
+          `;
+        }).join('');
+        return `
+          <div style="grid-column:1/-1;margin-top:2px;">
+            <div style="color:#7dd3fc;font-weight:700;margin:8px 2px;">${cat}（${grouped[cat].length}）</div>
+            <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));gap:10px;">${cards}</div>
+          </div>
+        `;
+      }).join('');
+      }
+
+      document.getElementById('strategy-list').innerHTML = (companyInfo.strategyTimeline || []).slice(0,12).map(x => `
+        <div style="border:1px solid #243244;border-radius:8px;padding:8px;background:#0b1324;">
+          <div style="color:#e2e8f0;font-weight:700;">${x.date || '时间待补'} ｜ ${x.event || ''}</div>
+          <div style="color:#cbd5e1;font-size:12px;margin-top:4px;">${x.whyImportant || ''}</div>
+          <div style="color:#94a3b8;font-size:12px;margin-top:4px;">来源：${x.source || ''}</div>
+          ${x.url ? `<a href="${x.url}" target="_blank" style="color:#7dd3fc;">查看来源</a>` : ''}
+        </div>
+      `).join('') || '<div class="sub">暂无战略时间线（可重试刷新）</div>';
+
+      const updates = analysisResp.data.updates || {};
+      document.getElementById('ann-list').innerHTML = (updates.announcements || []).slice(0,10).map(x => `
+        <div style="border:1px solid #243244;border-radius:8px;padding:8px;background:#0b1324;">
+          <div style="color:#e2e8f0;font-weight:600;">${x.title || ''}</div>
+          <div style="color:#94a3b8;font-size:12px;">${x.date || ''} ${((x.tags||[]).join(' / '))}</div>
+          ${x.url ? `<a href="${x.url}" target="_blank" style="color:#7dd3fc;">查看公告</a>` : ''}
+        </div>
+      `).join('') || '<div class="sub">暂无公告</div>';
+      document.getElementById('news-list').innerHTML = (updates.news || []).slice(0,10).map(x => `
+        <div style="border:1px solid #243244;border-radius:8px;padding:8px;background:#0b1324;">
+          <div style="color:#e2e8f0;font-weight:600;">${x.title || ''}</div>
+          <div style="color:#94a3b8;font-size:12px;">${x.date || ''} ${x.media || ''}</div>
+          <div style="color:#cbd5e1;font-size:12px;">${x.summary || ''}</div>
+          ${x.url ? `<a href="${x.url}" target="_blank" style="color:#7dd3fc;">查看新闻</a>` : ''}
+        </div>
+      `).join('') || '<div class="sub">暂无新闻</div>';
+
+      const mmap = analysisResp.data.mindmap || 'mindmap\n  root((暂无数据))';
+      document.getElementById('mindmap-src').textContent = mmap;
+
+      currentTree = analysisResp.data.tree || { name: `${code}`, children: [] };
+      collapsedNodeIds = new Set();
+      const supplyTree = analysisResp.data.supplyChainTree || null;
+      nodeEvidenceMap = analysisResp.data.nodeEvidenceMap || {};
+      const aiMeta = analysisResp.data.ai || {};
+      const qa = aiMeta.qualityAudit || {};
+      const pa = aiMeta.productAudit || {};
+      const stats = treeStats(currentTree);
+      const aiLabel = aiMeta.failed
+        ? `调用失败(${aiMeta.model || '-'})`
+        : (aiMeta.used ? `已启用(${aiMeta.model || '-'})` : '未命中/未配置');
+      document.getElementById('tree-stats').textContent = `节点总数 ${stats.total} ｜ 叶子节点 ${stats.leaf} ｜ 最大层级 ${stats.maxDepth} ｜ AI ${aiLabel} ｜ 审核 ${qa.pass ? '通过' : '补全中'}(摘要${qa.summary_len || 0}/业务线${qa.business_lines || 0}/产品${qa.products || 0}/战略${qa.strategy || 0}) ｜ 产品质检 ${pa.usedAI ? 'AI复审' : '规则复审'}（剔除${pa.rejectedCount || 0}）`;
+      if (aiMeta.failed) {
+        runStatus.textContent = `AI调用失败：${aiMeta.failureMessage || '请检查Token/配额后重试'}`;
+      } else {
+        runStatus.textContent = qa.pass ? '生成完成（已通过内容审核）' : '生成完成（已做自动补全）';
+      }
+      drawer.style.display = 'none';
+      renderTree();
+      renderSupplyTree(supplyTree);
+
+      // 备用：若图渲染异常，仍可显示 mermaid 文本源码
+      try {
+        if (window.mermaid) window.mermaid.initialize({ startOnLoad: false });
+      } catch (_) {}
+    } catch (e) {
+      runStatus.textContent = `失败：${e.message || String(e)}`;
+      alert(e.message || String(e));
+    } finally {
+      runBtn.disabled = false;
+      runBtn.textContent = '生成研报分析';
+    }
+  }
+
+  runBtn.addEventListener('click', loadAll);
+  codeInput.addEventListener('keydown', (e) => { if (e.key === 'Enter') loadAll(); });
+  layoutSel.addEventListener('change', renderTree);
+  depthRange.addEventListener('input', renderTree);
+  searchInput.addEventListener('input', renderTree);
+  fitBtn.addEventListener('click', () => {
+    if (!chart) return;
+    chart.resize();
+    renderTree();
+  });
+  expandBtn.addEventListener('click', () => {
+    depthRange.value = '7';
+    renderTree();
+  });
+  collapseBtn.addEventListener('click', () => {
+    depthRange.value = '2';
+    renderTree();
+  });
+  toggleTreeBtn.addEventListener('click', () => {
+    const el = document.getElementById('tree-chart');
+    const hidden = el.style.display === 'none';
+    el.style.display = hidden ? 'block' : 'none';
+    toggleTreeBtn.textContent = hidden ? '隐藏导图' : '显示导图';
+    if (hidden) renderTree();
+  });
+  exportBtn.addEventListener('click', () => {
+    if (!chart) return;
+    const url = chart.getDataURL({ type: 'png', pixelRatio: 2, backgroundColor: '#ffffff' });
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `mindmap-${codeInput.value || 'stock'}.png`;
+    a.click();
+  });
+  reportFilterInput.addEventListener('input', renderReportsTable);
+  exportReportsBtn.addEventListener('click', () => {
+    if (!reportsCache.length) return;
+    const rows = [['日期','机构','标题','评级','目标价','来源','PDF']].concat(
+      reportsCache.map(x => [x.publishDate || '', x.orgName || '', x.title || '', x.rating || '', x.targetPrice || '', x.source || '', x.pdf || ''])
+    );
+    const csv = rows.map(r => r.map(v => `"${String(v).replaceAll('"','""')}"`).join(',')).join('\n');
+    const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `reports-${codeInput.value || 'stock'}.csv`;
+    a.click();
+    URL.revokeObjectURL(url);
+  });
+  drawerClose.addEventListener('click', () => { drawer.style.display = 'none'; });
+  menuCollapseBtn.addEventListener('click', toggleNodeCollapse);
+  menuExplainBtn.addEventListener('click', explainNode);
+  explainClose.addEventListener('click', () => { explainDrawer.style.display = 'none'; });
+  document.addEventListener('click', (e) => {
+    if (!nodeMenu.contains(e.target) && e.target?.closest?.('#tree-chart') == null) {
+      nodeMenu.style.display = 'none';
+    }
+  });
+</script>
+</body></html>
