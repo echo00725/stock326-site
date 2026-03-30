@@ -331,7 +331,8 @@ def _fetch_universe_realtime(limit_pages: int = 40) -> list[dict]:
                 }
             )
 
-    out = [x for x in rows if x["price"] > 0 and x["amount"] > 0]
+    # 涨跌家数口径要覆盖“全部可交易标的”（含当日零成交/停牌），不能按成交额过滤
+    out = [x for x in rows if x["price"] > 0]
     if out:
         UNIVERSE_CACHE = {"ts": time.time(), "rows": out}
         try:
@@ -860,8 +861,8 @@ def _oversold_rebound_scan() -> dict:
 
 def _market_pulse() -> dict:
     now = _cn_now().strftime("%Y-%m-%d %H:%M:%S")
-    # 全市场口径：30页 * 200 = 6000（覆盖沪深A股主流样本）
-    uni = _fetch_universe_realtime(limit_pages=30)
+    # 全市场口径：尽量抓满分页（40页*200），覆盖沪深A股+北交所
+    uni = _fetch_universe_realtime(limit_pages=40)
     up = sum(1 for x in uni if x["chg"] > 0)
     down = sum(1 for x in uni if x["chg"] < 0)
     flat = len(uni) - up - down
@@ -873,7 +874,7 @@ def _market_pulse() -> dict:
             "name": "当前统计口径",
             "fs": "m:0 t:6,m:0 t:80,m:1 t:2,m:1 t:23",
             "desc": "东财A股口径（沪深主板/中小/创业/科创/北交所）",
-            "limit_pages": 30,
+            "limit_pages": 40,
             "page_size": 200,
         },
         "stats": {"up": up, "down": down, "flat": flat, "total": len(uni), "amount_total": round(amt, 2)},
