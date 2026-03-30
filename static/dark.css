@@ -1,6 +1,22 @@
-body{background:#0b1220!important;color:#dbe7ff!important}
+body{
+  background:
+    radial-gradient(1200px 700px at 85% -10%, rgba(90,114,255,.20), transparent 65%),
+    radial-gradient(1000px 600px at 0% 100%, rgba(30,180,255,.14), transparent 60%),
+    linear-gradient(180deg,#070b14,#0b1220)!important;
+  color:#dbe7ff!important;
+  position:relative;
+}
+body::before{
+  content:"";
+  position:fixed; inset:0; z-index:-1; pointer-events:none;
+  background-image:
+    linear-gradient(rgba(130,160,220,.07) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(130,160,220,.07) 1px, transparent 1px);
+  background-size:34px 34px;
+  opacity:.5;
+}
 .container{max-width:1200px}
-.card,.topbar,.panel,.pick{background:#111a2e!important;border:1px solid #223052!important;color:#dbe7ff!important;box-shadow:none!important}
+.card,.topbar,.panel,.pick{background:rgba(17,26,46,.82)!important;border:1px solid #223052!important;color:#dbe7ff!important;box-shadow:none!important}
 .sub,.muted{color:#8ea3d6!important}
 a{color:#9cc1ff}
 .btn{background:#2563eb!important}

@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Stock326 · A股智能研判中枢</title>
+  <title>A股智能研判中枢</title>
   <style>
     :root {
       --bg: #070b14;
@@ -133,6 +133,30 @@
     }
     .section h2 { margin: 0 0 12px; font-size: 17px; }
 
+    .quickbar {
+      margin-top: 14px;
+      display:flex; gap:8px; flex-wrap:wrap; align-items:center;
+    }
+    .chip {
+      border:1px solid rgba(123,174,255,.35);
+      background: rgba(14,27,49,.7);
+      color:#d7e4ff;
+      border-radius:999px;
+      padding:8px 12px;
+      font-size:12px;
+      cursor:pointer;
+    }
+    .chip.active { background: rgba(42,92,182,.65); border-color: rgba(156,198,255,.65); }
+    .search {
+      margin-left:auto;
+      min-width:220px;
+      border:1px solid rgba(123,174,255,.35);
+      background: rgba(10,20,36,.82);
+      color:#e8eefc;
+      border-radius:10px;
+      padding:8px 10px;
+    }
+
     .core-grid {
       display: grid;
       grid-template-columns: repeat(auto-fit, minmax(230px, 1fr));
@@ -191,7 +215,7 @@
     <section class="hero">
       <div class="head">
         <div>
-          <h1 class="title">Stock326 · A股智能研判中枢</h1>
+          <h1 class="title">A股智能研判中枢</h1>
           <div class="sub">聚合研报、新闻、资金与盘口，做「盘前预案 + 盘中跟踪 + 盘后复盘」的一体化决策面板。</div>
         </div>
         <div class="badge"><span class="dot"></span><span id="market-status">市场状态加载中...</span></div>
@@ -216,47 +240,84 @@
       </div>
     </section>
 
-    <section class="section">
+    <div class="quickbar">
+      <button class="chip active" data-filter="all">全部功能</button>
+      <button class="chip" data-filter="core">仅看核心</button>
+      <button class="chip" data-filter="assist">仅看辅助</button>
+      <input id="feature-search" class="search" placeholder="搜索功能关键词，如 资金流入 / 新闻 / 研报" />
+    </div>
+
+    <section class="section" data-section="core">
       <h2>核心功能</h2>
       <div class="core-grid">
-        <a class="feature" href="/stock-research">
+        <a class="feature feature-item" data-type="core" data-keywords="研报 行业 思维导图 qwen" href="/stock-research">
           <div class="name">股票行业研报分析（基于qwen-plus）</div>
           <div class="desc">多源研报抽取 + 主营业务图谱 + 思维导图结构化展示</div>
         </a>
-        <a class="feature" href="/news">
+        <a class="feature feature-item" data-type="core" data-keywords="新闻 24小时 雷达 事件驱动" href="/news">
           <div class="name">24小时新闻雷达</div>
           <div class="desc">快速浏览市场异动新闻，捕捉事件驱动机会</div>
         </a>
-        <a class="feature" href="/volume-profile">
+        <a class="feature feature-item" data-type="core" data-keywords="成交量 价位 分布 筹码 支撑 压力" href="/volume-profile">
           <div class="name">成交量价位分布</div>
           <div class="desc">筹码密集区识别，辅助判断支撑位与压力位</div>
         </a>
-        <a class="feature" href="/shortline-dashboard">
+        <a class="feature feature-item" data-type="core" data-keywords="短线 排名 行业 资金流入 热点" href="/shortline-dashboard">
           <div class="name">短线排名+行业资金流入</div>
           <div class="desc">热点赛道与强势个股联动观察，适合盘中跟踪</div>
         </a>
       </div>
     </section>
 
-    <section class="section">
+    <section class="section" data-section="assist">
       <h2>辅助功能</h2>
       <div class="minor">
-        <a href="/monitor-big-buy">盘口大笔主动买入监控</a>
-        <a href="/oversold-rebound">超跌反弹扫描</a>
-        <a href="/market-pulse">市场脉搏（涨跌家数/领涨）</a>
-        <a href="/flow-divergence">资金流入为正但收益为负（2~3日）</a>
-        <a href="/main-net-inflow">30天主力净流入</a>
-        <a href="/parse-admin">后台解析页</a>
-        <a href="/policy-dashboard">中国财政/货币政策全景</a>
-        <a href="/validation">策略验证页</a>
+        <a class="feature-item" data-type="assist" data-keywords="盘口 主动买入 监控" href="/monitor-big-buy">盘口大笔主动买入监控</a>
+        <a class="feature-item" data-type="assist" data-keywords="超跌 反弹 扫描" href="/oversold-rebound">超跌反弹扫描</a>
+        <a class="feature-item" data-type="assist" data-keywords="市场 脉搏 涨跌 领涨" href="/market-pulse">市场脉搏（涨跌家数/领涨）</a>
+        <a class="feature-item" data-type="assist" data-keywords="资金流入 收益 负 divergence" href="/flow-divergence">资金流入为正但收益为负（2~3日）</a>
+        <a class="feature-item" data-type="assist" data-keywords="30天 主力 净流入" href="/main-net-inflow">30天主力净流入</a>
+        <a class="feature-item" data-type="assist" data-keywords="后台 解析" href="/parse-admin">后台解析页</a>
+        <a class="feature-item" data-type="assist" data-keywords="财政 货币 政策" href="/policy-dashboard">中国财政/货币政策全景</a>
+        <a class="feature-item" data-type="assist" data-keywords="策略 验证" href="/validation">策略验证页</a>
       </div>
     </section>
 
-    <div class="footer">Stock326 · 为A股研究与交易执行打造的智能工作台</div>
+    <div class="footer">为A股研究与交易执行打造的智能工作台</div>
   </main>
 
   <script>
     function pad(n){ return String(n).padStart(2, '0'); }
+
+    const chips = Array.from(document.querySelectorAll('.chip'));
+    const searchEl = document.getElementById('feature-search');
+    const allItems = Array.from(document.querySelectorAll('.feature-item'));
+    let currentFilter = 'all';
+
+    function applyFilter() {
+      const q = (searchEl.value || '').trim().toLowerCase();
+      allItems.forEach(el => {
+        const type = el.dataset.type || '';
+        const text = `${el.textContent || ''} ${(el.dataset.keywords || '')}`.toLowerCase();
+        const typeOk = currentFilter === 'all' || currentFilter === type;
+        const textOk = !q || text.includes(q);
+        el.style.display = (typeOk && textOk) ? '' : 'none';
+      });
+
+      document.querySelectorAll('[data-section]').forEach(sec => {
+        const hasVisible = Array.from(sec.querySelectorAll('.feature-item')).some(x => x.style.display !== 'none');
+        sec.style.display = hasVisible ? '' : 'none';
+      });
+    }
+
+    chips.forEach(chip => chip.addEventListener('click', () => {
+      chips.forEach(c => c.classList.remove('active'));
+      chip.classList.add('active');
+      currentFilter = chip.dataset.filter || 'all';
+      applyFilter();
+    }));
+    searchEl.addEventListener('input', applyFilter);
+
     function updateClock() {
       const now = new Date();
       const cn = new Date(now.toLocaleString('en-US', { timeZone: 'Asia/Shanghai' }));
@@ -276,6 +337,7 @@
     const track = document.getElementById('ticker-track');
     track.innerHTML = track.innerHTML + track.innerHTML;
 
+    applyFilter();
     updateClock();
     setInterval(updateClock, 1000);
   </script>
