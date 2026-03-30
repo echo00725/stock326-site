@@ -14,7 +14,7 @@
   <p class="sub">汇总权威券商/研究机构研报，自动生成观点分析与业务线思维导图（本地演示版）。</p>
 
   <section class="card" style="display:flex;gap:10px;flex-wrap:wrap;align-items:center;">
-    <input id="code" placeholder="输入6位股票代码，如 600519" value="600519" style="min-width:220px;padding:10px;border-radius:10px;border:1px solid #ccc" />
+    <input id="code" placeholder="输入6位股票代码，如 002558" value="002558" style="min-width:220px;padding:10px;border-radius:10px;border:1px solid #ccc" />
     <label class="sub">范围
       <select id="days" style="margin-left:6px;padding:8px;border-radius:8px;border:1px solid #ccc;">
         <option value="365">近1年</option>
@@ -38,10 +38,8 @@
     <h2>1) 公司主营业务深度分析（AI+多源）</h2>
     <div id="mainbiz-summary" class="sub" style="margin-bottom:8px;"></div>
     <ul id="biz-lines"></ul>
-    <h3 style="margin-top:10px;font-size:16px;">核心产品清单（尽量找全）</h3>
+    <h3 style="margin-top:10px;font-size:16px;">核心产品清单</h3>
     <div id="product-cards" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));gap:10px;"></div>
-    <h3 style="margin-top:10px;font-size:16px;">未来战略布局（含时间点）</h3>
-    <div id="strategy-list" style="display:grid;gap:8px;"></div>
     <ul id="analysis-list" style="margin-top:10px;"></ul>
     <div id="analysis-note" class="sub"></div>
   </section>
@@ -171,16 +169,17 @@
   }
 
   function formatEta(seconds) {
-    const mins = Math.max(1, Math.round(seconds / 60));
+    const mins = Math.max(1, Math.ceil(seconds / 60));
     return `${mins}分钟`;
   }
 
-  function startRunTicker(baseEstimateSec = 210) {
+  function startRunTicker(baseEstimateSec = 360) {
     runStartAt = Date.now();
     if (runTicker) clearInterval(runTicker);
     const key = 'stock-research-estimate-sec';
     const fromStorage = Number(localStorage.getItem(key) || 0);
     let estimateSec = fromStorage > 30 ? fromStorage : baseEstimateSec;
+    estimateSec = Math.max(360, estimateSec);
 
     const tick = () => {
       const elapsed = Math.floor((Date.now() - runStartAt) / 1000);
@@ -351,6 +350,15 @@
     (node.children || []).forEach(c => markSearch(c, keyword, depth + 1));
   }
 
+  function collectNodeIdsByName(root, targetName, out = new Set(), depth = 0, path = 'root', index = 0) {
+    if (!root) return out;
+    const name = String(root.name || '');
+    const id = `${path}/${index}:${name}`;
+    if (name.includes(targetName)) out.add(id);
+    (root.children || []).forEach((c, i) => collectNodeIdsByName(c, targetName, out, depth + 1, id, i));
+    return out;
+  }
+
   function flattenTreeToGraph(root, maxDepth = 2, keyword = '', collapsed = new Set()) {
     const nodes = [];
     const links = [];
@@ -501,7 +509,7 @@
 
     runBtn.disabled = true;
     runBtn.textContent = '生成中...';
-    const ticker = startRunTicker(210);
+    const ticker = startRunTicker(360);
     let elapsedSec = 0;
 
     try {
@@ -571,14 +579,6 @@
       }).join('');
       }
 
-      document.getElementById('strategy-list').innerHTML = (companyInfo.strategyTimeline || []).slice(0,12).map(x => `
-        <div style="border:1px solid #243244;border-radius:8px;padding:8px;background:#0b1324;">
-          <div style="color:#e2e8f0;font-weight:700;">${x.date || '时间待补'} ｜ ${x.event || ''}</div>
-          <div style="color:#cbd5e1;font-size:12px;margin-top:4px;">${x.whyImportant || ''}</div>
-          <div style="color:#94a3b8;font-size:12px;margin-top:4px;">来源：${x.source || ''}</div>
-          ${x.url ? `<a href="${x.url}" target="_blank" style="color:#7dd3fc;">查看来源</a>` : ''}
-        </div>
-      `).join('') || '<div class="sub">暂无战略时间线（可重试刷新）</div>';
 
       const updates = analysisResp.data.updates || {};
       document.getElementById('ann-list').innerHTML = (updates.announcements || []).slice(0,10).map(x => `
@@ -601,7 +601,7 @@
       document.getElementById('mindmap-src').textContent = mmap;
 
       currentTree = analysisResp.data.tree || { name: `${code}`, children: [] };
-      collapsedNodeIds = new Set();
+      collapsedNodeIds = collectNodeIdsByName(currentTree, '未来战略布局');
       const supplyTree = analysisResp.data.supplyChainTree || null;
       nodeEvidenceMap = analysisResp.data.nodeEvidenceMap || {};
       const aiMeta = analysisResp.data.ai || {};
@@ -697,6 +697,10 @@
     if (!nodeMenu.contains(e.target)) {
       nodeMenu.style.display = 'none';
     }
+  });
+
+  window.addEventListener('DOMContentLoaded', () => {
+    loadAll();
   });
 </script>
 </body></html>
