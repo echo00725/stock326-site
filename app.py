@@ -277,8 +277,8 @@ def _fill_industry_flow_if_missing(data: dict | None) -> dict:
 
 
 # ====== 短线排名 ======
-def _fetch_universe_realtime(limit_pages: int = 12) -> list[dict]:
-    # 东财全市场快照：默认12页（12*200=2400）已足够用于市场脉搏与候选池
+def _fetch_universe_realtime(limit_pages: int = 40) -> list[dict]:
+    # 东财全市场快照：尽量抓全分页（默认40页，上限由数据源返回决定）
     # 关键修复：单页失败不再让整接口500，采用“部分成功可返回”
     global UNIVERSE_CACHE
     rows = []
@@ -295,18 +295,21 @@ def _fetch_universe_realtime(limit_pages: int = 12) -> list[dict]:
             "fltt": 2,
             "invt": 2,
             "fid": "f6",  # 成交额排序
-            "fs": "m:0 t:6,m:0 t:80,m:1 t:2,m:1 t:23",  # 沪深A
+            "fs": "m:0 t:6,m:0 t:80,m:1 t:2,m:1 t:23,m:0 t:81 s:2048",  # 沪深A + 北交所
             "fields": "f12,f14,f2,f3,f6,f8,f15,f16,f17,f18",
             "ut": "fa5fd1943c7b386f172d6893dbfba10b",
         }
         try:
-            r = _rq_get(url, params=params, timeout=4, tries=1)
+            r = _rq_get(url, params=params, timeout=7, tries=2)
             r.raise_for_status()
             diff = ((r.json().get("data") or {}).get("diff")) or []
             ok_pages += 1
         except Exception as e:
             last_err = e
             continue
+
+        if not diff:
+            break
 
         for d in diff:
             code = str(d.get("f12") or "")
@@ -869,7 +872,7 @@ def _market_pulse() -> dict:
         "scope": {
             "name": "当前统计口径",
             "fs": "m:0 t:6,m:0 t:80,m:1 t:2,m:1 t:23",
-            "desc": "东财A股口径（沪深主板/中小/创业/科创），暂未并入北交所",
+            "desc": "东财A股口径（沪深主板/中小/创业/科创/北交所）",
             "limit_pages": 30,
             "page_size": 200,
         },
