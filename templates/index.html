@@ -373,18 +373,25 @@
       }
 
       function drawCandles(t) {
-        const count = Math.max(28, Math.floor(w / 42));
-        const step = w / count;
+        const step = Math.max(18, Math.floor(w / 46));
+        const count = Math.ceil(w / step) + 4;
         const baseY = h * 0.72;
-        for (let i = 0; i < count; i++) {
-          const x = i * step + step * 0.5;
-          const seed = i * 0.73 + t * 0.0009;
-          const o = baseY + Math.sin(seed * 1.9) * 18;
-          const c = baseY + Math.sin(seed * 2.3 + 0.8) * 18;
-          const hi = Math.min(o, c) - (6 + Math.abs(Math.sin(seed * 3.1)) * 12);
-          const lo = Math.max(o, c) + (6 + Math.abs(Math.cos(seed * 2.7)) * 12);
+        const speed = 0.04; // 越大横向滚动越快
+        const shift = (t * speed) % step;
+        const k = Math.floor((t * speed) / step);
+
+        for (let i = -2; i < count; i++) {
+          const x = i * step - shift + step * 0.5;
+          const idx = i + k;
+          const seed = idx * 0.67;
+
+          const o = baseY + Math.sin(seed * 0.9 + t * 0.0012) * 18 + Math.sin(seed * 0.2) * 8;
+          const c = baseY + Math.sin(seed * 1.13 + 0.6 + t * 0.0012) * 18 + Math.sin(seed * 0.24 + 0.3) * 8;
+          const hi = Math.min(o, c) - (6 + Math.abs(Math.sin(seed * 1.7)) * 10);
+          const lo = Math.max(o, c) + (6 + Math.abs(Math.cos(seed * 1.5)) * 10);
+
           const up = c < o; // 屏幕坐标越小越高
-          const color = up ? 'rgba(239,68,68,.72)' : 'rgba(16,185,129,.72)';
+          const color = up ? 'rgba(239,68,68,.78)' : 'rgba(16,185,129,.78)';
 
           ctx.strokeStyle = color;
           ctx.lineWidth = 1;
@@ -396,7 +403,7 @@
           const bodyTop = Math.min(o, c);
           const bodyH = Math.max(3, Math.abs(c - o));
           ctx.fillStyle = color;
-          ctx.fillRect(x - step * 0.22, bodyTop, step * 0.44, bodyH);
+          ctx.fillRect(x - step * 0.24, bodyTop, step * 0.48, bodyH);
         }
       }
 
