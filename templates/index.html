@@ -457,7 +457,7 @@
       s.push(`<span>创业板指 <b class="${clsBySign(d.indices?.cyb?.chg_pct)}">${fmtPct(d.indices?.cyb?.chg_pct)}</b></span>`);
       s.push(`<span>北向资金 <b class="${clsBySign(d.northbound_net_yi)}">${fmtYi(d.northbound_net_yi)}</b></span>`);
       s.push(`<span>两市成交额 <b>${Number(d.amount_total_yi || 0).toFixed(2)}亿</b></span>`);
-      s.push(`<span>涨跌家数 <b class="up">${d.up || 0}</b> / <b class="down">${d.down || 0}</b></span>`);
+      s.push(`<span>涨家数 <b class="up">${d.up || 0}</b> ｜ 跌家数 <b class="down">${d.down || 0}</b></span>`);
       const html = s.join('');
       track.innerHTML = html + html;
     }
