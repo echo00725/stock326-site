@@ -738,10 +738,10 @@ def _rsi14(closes: list[float]) -> float:
 
 
 def _fetch_universe_fast_full() -> tuple[list[dict], int, int]:
-    # 全市场快速版：分片抓取；遇到反爬/超时时跳过失败分片，保证接口能返回
+    # 全市场快速版：分片抓取；优先用于“涨跌家数”口径
     rows = []
     ok_pages = 0
-    total_pages = 12
+    total_pages = 14
     for pn in range(1, total_pages + 1):
         url = "https://push2.eastmoney.com/api/qt/clist/get"
         params = {
@@ -752,13 +752,13 @@ def _fetch_universe_fast_full() -> tuple[list[dict], int, int]:
             "fltt": 2,
             "invt": 2,
             "fid": "f6",
-            "fs": "m:0 t:6,m:0 t:80,m:1 t:2,m:1 t:23",
+            "fs": "m:0 t:6,m:0 t:80,m:1 t:2,m:1 t:23,m:0 t:81 s:2048",
             "fields": "f12,f14,f2,f3,f6,f8,f24,f25",
             "ut": "fa5fd1943c7b386f172d6893dbfba10b",
         }
         try:
             # 此处不用重试，避免单次刷新卡住
-            r = requests.get(url, params=params, timeout=2.5, proxies={"http": None, "https": None})
+            r = requests.get(url, params=params, timeout=3.5, proxies={"http": None, "https": None})
             r.raise_for_status()
             diff = ((r.json().get("data") or {}).get("diff")) or []
             ok_pages += 1
@@ -777,7 +777,7 @@ def _fetch_universe_fast_full() -> tuple[list[dict], int, int]:
                     "ytd": float(d.get("f25") or 0),
                 }
             )
-    filtered = [x for x in rows if len(x["code"]) == 6 and x["price"] > 0 and x["amount"] > 0]
+    filtered = [x for x in rows if len(x["code"]) == 6 and x["price"] > 0]
     return filtered, ok_pages, total_pages
 
 
@@ -861,8 +861,8 @@ def _oversold_rebound_scan() -> dict:
 
 def _market_pulse() -> dict:
     now = _cn_now().strftime("%Y-%m-%d %H:%M:%S")
-    # 全市场口径：尽量抓满分页（40页*200），覆盖沪深A股+北交所
-    uni = _fetch_universe_realtime(limit_pages=40)
+    # 全市场口径：使用快速全量分片抓取（含北交所）
+    uni, ok_pages, total_pages = _fetch_universe_fast_full()
     up = sum(1 for x in uni if x["chg"] > 0)
     down = sum(1 for x in uni if x["chg"] < 0)
     flat = len(uni) - up - down
@@ -872,10 +872,11 @@ def _market_pulse() -> dict:
         "updated_at": now,
         "scope": {
             "name": "当前统计口径",
-            "fs": "m:0 t:6,m:0 t:80,m:1 t:2,m:1 t:23",
+            "fs": "m:0 t:6,m:0 t:80,m:1 t:2,m:1 t:23,m:0 t:81 s:2048",
             "desc": "东财A股口径（沪深主板/中小/创业/科创/北交所）",
-            "limit_pages": 40,
-            "page_size": 200,
+            "limit_pages": total_pages,
+            "ok_pages": ok_pages,
+            "page_size": 500,
         },
         "stats": {"up": up, "down": down, "flat": flat, "total": len(uni), "amount_total": round(amt, 2)},
         "leaders": [{"code":x["code"],"name":x["name"],"chg":round(x["chg"],2),"price":x["price"]} for x in top_up],
