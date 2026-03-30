@@ -4294,9 +4294,21 @@ def api_stock_research_reports():
     if not code.isdigit() or len(code) != 6:
         return jsonify({"ok": False, "error": "请输入6位A股代码"}), 400
 
+    cache_dir = os.path.join(BASE_DIR, "data")
+    os.makedirs(cache_dir, exist_ok=True)
+    cache_file = os.path.join(cache_dir, f"stock_research_reports_{code}_{days}_{page_size}.json")
+
     try:
+        if os.path.exists(cache_file) and (time.time() - os.path.getmtime(cache_file) < 6 * 3600):
+            with open(cache_file, "r", encoding="utf-8") as f:
+                cached = json.load(f)
+            return jsonify(cached)
+
         reports = _fetch_research_reports(code, days=days, page_size=page_size)
-        return jsonify({"ok": True, "data": {"code": code, "reports": reports}})
+        payload = {"ok": True, "data": {"code": code, "reports": reports}}
+        with open(cache_file, "w", encoding="utf-8") as f:
+            json.dump(payload, f, ensure_ascii=False)
+        return jsonify(payload)
     except Exception as e:
         return jsonify({"ok": False, "error": f"研报抓取失败：{e}"}), 500
 
@@ -4420,7 +4432,16 @@ def api_stock_research_analysis():
     if not code.isdigit() or len(code) != 6:
         return jsonify({"ok": False, "error": "请输入6位A股代码"}), 400
 
+    cache_dir = os.path.join(BASE_DIR, "data")
+    os.makedirs(cache_dir, exist_ok=True)
+    cache_file = os.path.join(cache_dir, f"stock_research_analysis_{code}_{days}.json")
+
     try:
+        if os.path.exists(cache_file) and (time.time() - os.path.getmtime(cache_file) < 6 * 3600):
+            with open(cache_file, "r", encoding="utf-8") as f:
+                cached = json.load(f)
+            return jsonify(cached)
+
         reports = _fetch_research_reports(code, days=days, page_size=30)
         business = _fetch_business_lines(code)
         analysis = _generate_report_analysis(code, reports, business)
@@ -4477,7 +4498,7 @@ def api_stock_research_analysis():
             if (not pa.get("usedAI")) or pa.get("fallbackUsed"):
                 ai_fail_msg = (ai_fail_msg + "；产品AI复审未成功").strip("；")
 
-        return jsonify({
+        payload = {
             "ok": True,
             "data": {
                 "code": code,
@@ -4526,7 +4547,10 @@ def api_stock_research_analysis():
                     "business": business.get("source") or [],
                 },
             },
-        })
+        }
+        with open(cache_file, "w", encoding="utf-8") as f:
+            json.dump(payload, f, ensure_ascii=False)
+        return jsonify(payload)
     except Exception as e:
         return jsonify({"ok": False, "error": f"分析生成失败：{e}"}), 500
 

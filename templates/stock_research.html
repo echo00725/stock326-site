@@ -180,6 +180,7 @@
     const fromStorage = Number(localStorage.getItem(key) || 0);
     let estimateSec = fromStorage > 30 ? fromStorage : baseEstimateSec;
     estimateSec = Math.max(360, estimateSec);
+    estimateSec = Math.max(360, estimateSec);
 
     const tick = () => {
       const elapsed = Math.floor((Date.now() - runStartAt) / 1000);
@@ -368,8 +369,9 @@
       const name = String(node.name || '');
       const id = `${path}/${index}:${name}`;
       const hit = keyword && name.toLowerCase().includes(keyword.toLowerCase());
+      const isCoreBiz = name.includes('核心主营业务');
       const baseSize = depth === 0 ? 42 : depth === 1 ? 24 : depth === 2 ? 17 : 12;
-      const color = hit ? '#fb7185' : depth === 0 ? '#f8fafc' : depth === 1 ? '#93c5fd' : depth === 2 ? '#5eead4' : '#c4b5fd';
+      const color = isCoreBiz ? '#ef4444' : (hit ? '#fb7185' : depth === 0 ? '#f8fafc' : depth === 1 ? '#93c5fd' : depth === 2 ? '#5eead4' : '#c4b5fd');
 
       const children = node.children || [];
       const isCollapsed = collapsed.has(id);
@@ -382,21 +384,21 @@
         branchPath,
         hasChildren: children.length > 0,
         collapsed: isCollapsed,
-        symbolSize: hit ? baseSize + 4 : baseSize,
+        symbolSize: (hit || isCoreBiz) ? baseSize + 5 : baseSize,
         draggable: true,
         itemStyle: {
           color,
-          shadowBlur: hit ? 24 : 14,
-          shadowColor: hit ? 'rgba(251,113,133,.95)' : 'rgba(96,165,250,.65)',
-          borderColor: hit ? '#be123c' : 'rgba(255,255,255,.7)',
-          borderWidth: hit ? 2.5 : 1
+          shadowBlur: (hit || isCoreBiz) ? 26 : 14,
+          shadowColor: isCoreBiz ? 'rgba(239,68,68,.95)' : (hit ? 'rgba(251,113,133,.95)' : 'rgba(96,165,250,.65)'),
+          borderColor: isCoreBiz ? '#7f1d1d' : (hit ? '#be123c' : 'rgba(255,255,255,.7)'),
+          borderWidth: (hit || isCoreBiz) ? 2.8 : 1
         },
         label: {
           show: true,
-          color: hit ? '#ffe4e6' : '#e2e8f0',
+          color: (hit || isCoreBiz) ? '#ffe4e6' : '#e2e8f0',
           fontSize: depth === 0 ? 15 : depth === 1 ? 13 : 12,
-          fontWeight: hit || depth <= 1 ? 'bold' : 'normal',
-          backgroundColor: hit ? 'rgba(157,23,77,.35)' : 'rgba(15,23,42,.45)',
+          fontWeight: (hit || isCoreBiz || depth <= 1) ? 'bold' : 'normal',
+          backgroundColor: isCoreBiz ? 'rgba(153,27,27,.45)' : (hit ? 'rgba(157,23,77,.35)' : 'rgba(15,23,42,.45)'),
           borderRadius: 8,
           padding: [3, 7]
         }
