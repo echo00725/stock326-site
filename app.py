@@ -4294,7 +4294,7 @@ def api_stock_research_reports():
     if not code.isdigit() or len(code) != 6:
         return jsonify({"ok": False, "error": "请输入6位A股代码"}), 400
 
-    cache_dir = os.path.join(BASE_DIR, "data")
+    cache_dir = str(DATA_DIR)
     os.makedirs(cache_dir, exist_ok=True)
     cache_file = os.path.join(cache_dir, f"stock_research_reports_{code}_{days}_{page_size}.json")
 
@@ -4432,7 +4432,7 @@ def api_stock_research_analysis():
     if not code.isdigit() or len(code) != 6:
         return jsonify({"ok": False, "error": "请输入6位A股代码"}), 400
 
-    cache_dir = os.path.join(BASE_DIR, "data")
+    cache_dir = str(DATA_DIR)
     os.makedirs(cache_dir, exist_ok=True)
     cache_file = os.path.join(cache_dir, f"stock_research_analysis_{code}_{days}.json")
 
