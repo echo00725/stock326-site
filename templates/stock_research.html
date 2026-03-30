@@ -9,11 +9,12 @@
   <script src="https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.min.js"></script>
 
   <style id="GLOBAL_THEME_V2">
-    :root{--bg:#070b14;--bg2:#0b1220;--card:rgba(17,26,46,.82);--line:#223052;--text:#dbe7ff;--sub:#8ea3d6}
+    :root{--bg:#04070f;--bg2:#0a0f1d;--card:#0f172a;--card2:#111b31;--line:#26344f;--text:#e7efff;--sub:#9bb0d9}
+    html,body{background:#04070f!important}
     body{
       background:
-        radial-gradient(1200px 700px at 85% -10%, rgba(90,114,255,.20), transparent 65%),
-        radial-gradient(1000px 600px at 0% 100%, rgba(30,180,255,.14), transparent 60%),
+        radial-gradient(900px 520px at 85% -15%, rgba(56,104,210,.22), transparent 60%),
+        radial-gradient(780px 460px at -10% 110%, rgba(24,144,255,.14), transparent 62%),
         linear-gradient(180deg,var(--bg),var(--bg2)) !important;
       color:var(--text)!important;
       min-height:100vh;
@@ -21,11 +22,11 @@
     .container{max-width:1200px}
     h1,h2,h3,h4,h5,h6,li,th,td,label,span,div,p{color:inherit}
     .sub,.muted{color:var(--sub)!important}
-    .card,.panel,.topbar,.pick{background:var(--card)!important;border:1px solid var(--line)!important;box-shadow:none!important}
-    a{color:#9cc1ff}
-    .btn{background:#2563eb!important;color:#fff!important}
-    .btn.secondary{background:#334155!important}
-    input,select,textarea{background:#0e1628!important;color:#e6eeff!important;border:1px solid #2a3d69!important}
+    .card,.panel,.topbar,.pick,section{background:linear-gradient(180deg,var(--card2),var(--card))!important;border:1px solid var(--line)!important;box-shadow:0 10px 28px rgba(0,0,0,.28)!important}
+    a{color:#9ec4ff}
+    .btn{background:#2563eb!important;color:#fff!important;border:1px solid #2f6fff!important}
+    .btn.secondary{background:#243247!important;border:1px solid #334866!important}
+    input,select,textarea{background:#0a1326!important;color:#e6eeff!important;border:1px solid #2a3d69!important}
     table th,table td{border-bottom:1px solid #243457}
   </style>
 
