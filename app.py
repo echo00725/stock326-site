@@ -752,7 +752,8 @@ def _fetch_universe_fast_full() -> tuple[list[dict], int, int]:
     ]
 
     url = "https://push2.eastmoney.com/api/qt/clist/get"
-    page_size = 500
+    # 东财该接口单页实际上限约100，按100分页可覆盖全量
+    page_size = 100
 
     for fs in market_segments:
         first_params = {
