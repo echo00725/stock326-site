@@ -163,6 +163,7 @@
   let activeNodeRef = null;
   let runTicker = null;
   let runStartAt = 0;
+  const DEFAULT_PAGE_CACHE_KEY = 'stock-research-default-002558-v1';
 
   function escapeHtml(v) {
     return String(v ?? '').replace(/[&<>"']/g, (m) => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m]));
@@ -626,6 +627,33 @@
       renderTree();
       renderSupplyTree(supplyTree);
 
+      try {
+        if (code === '002558') {
+          localStorage.setItem(DEFAULT_PAGE_CACHE_KEY, JSON.stringify({
+            code,
+            days,
+            pageSize,
+            savedAt: Date.now(),
+            reportsCache,
+            reportsMeta: document.getElementById('reports-meta').textContent || '',
+            reportsSource: document.getElementById('reports-source').textContent || '',
+            reportsBody: document.getElementById('reports-body').innerHTML || '',
+            mainbizSummary: document.getElementById('mainbiz-summary').textContent || '',
+            bizLinesHtml: document.getElementById('biz-lines').innerHTML || '',
+            productCardsHtml: document.getElementById('product-cards').innerHTML || '',
+            analysisListHtml: document.getElementById('analysis-list').innerHTML || '',
+            analysisNote: document.getElementById('analysis-note').textContent || '',
+            annHtml: document.getElementById('ann-list').innerHTML || '',
+            newsHtml: document.getElementById('news-list').innerHTML || '',
+            mindmapSrc: document.getElementById('mindmap-src').textContent || '',
+            treeStats: document.getElementById('tree-stats').textContent || '',
+            currentTree,
+            supplyTree,
+            nodeEvidenceMap: nodeEvidenceMap || {}
+          }));
+        }
+      } catch (_) {}
+
       // 备用：若图渲染异常，仍可显示 mermaid 文本源码
       try {
         if (window.mermaid) window.mermaid.initialize({ startOnLoad: false });
@@ -702,7 +730,39 @@
   });
 
   window.addEventListener('DOMContentLoaded', () => {
-    loadAll();
+    let restored = false;
+    try {
+      const cached = JSON.parse(localStorage.getItem(DEFAULT_PAGE_CACHE_KEY) || 'null');
+      if (cached && cached.code === '002558') {
+        codeInput.value = '002558';
+        if (cached.days) daysSel.value = String(cached.days);
+        if (cached.pageSize) pageSizeSel.value = String(cached.pageSize);
+        reportsCache = Array.isArray(cached.reportsCache) ? cached.reportsCache : [];
+        document.getElementById('reports-meta').textContent = cached.reportsMeta || '待加载';
+        document.getElementById('reports-source').textContent = cached.reportsSource || '';
+        document.getElementById('reports-body').innerHTML = cached.reportsBody || '';
+        document.getElementById('mainbiz-summary').textContent = cached.mainbizSummary || '';
+        document.getElementById('biz-lines').innerHTML = cached.bizLinesHtml || '';
+        document.getElementById('product-cards').innerHTML = cached.productCardsHtml || '';
+        document.getElementById('analysis-list').innerHTML = cached.analysisListHtml || '';
+        document.getElementById('analysis-note').textContent = cached.analysisNote || '';
+        document.getElementById('ann-list').innerHTML = cached.annHtml || '';
+        document.getElementById('news-list').innerHTML = cached.newsHtml || '';
+        document.getElementById('mindmap-src').textContent = cached.mindmapSrc || '';
+        document.getElementById('tree-stats').textContent = cached.treeStats || '';
+        currentTree = cached.currentTree || null;
+        collapsedNodeIds = collectNodeIdsByName(currentTree, '未来战略布局');
+        nodeEvidenceMap = cached.nodeEvidenceMap || {};
+        if (currentTree) renderTree();
+        renderSupplyTree(cached.supplyTree || null);
+        runStatus.textContent = '已加载默认结果：巨人网络 002558（可点击“生成研报分析”刷新）';
+        runBtn.disabled = false;
+        runBtn.textContent = '生成研报分析';
+        restored = true;
+      }
+    } catch (_) {}
+
+    if (!restored) loadAll();
   });
 </script>
 </body></html>
