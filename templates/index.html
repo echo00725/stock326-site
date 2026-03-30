@@ -1,37 +1,283 @@
 <!doctype html>
-<html lang="zh-CN"><head>
-  <meta charset="UTF-8" /><meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>A股盯盘工具目录</title>
-  <link rel="stylesheet" href="/static/style.css" />
-  <link rel="stylesheet" href="/static/dark.css" />
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Stock326 · A股智能研判中枢</title>
+  <style>
+    :root {
+      --bg: #070b14;
+      --bg2: #0b1220;
+      --card: rgba(12, 22, 40, .66);
+      --line: rgba(123, 174, 255, .18);
+      --text: #e8eefc;
+      --sub: #98a6c6;
+      --up: #ff4d6d;
+      --down: #00c087;
+      --accent: #6aa5ff;
+      --glow: 0 12px 40px rgba(46,120,255,.25);
+    }
+
+    * { box-sizing: border-box; }
+    html, body { margin: 0; padding: 0; }
+    body {
+      font-family: "Inter", "PingFang SC", "Microsoft YaHei", sans-serif;
+      color: var(--text);
+      background:
+        radial-gradient(1200px 700px at 85% -10%, rgba(90,114,255,.23), transparent 65%),
+        radial-gradient(1000px 600px at 0% 100%, rgba(30,180,255,.16), transparent 60%),
+        linear-gradient(180deg, var(--bg), var(--bg2));
+      min-height: 100vh;
+      overflow-x: hidden;
+    }
+
+    .bg-grid, .bg-grid::before {
+      position: fixed; inset: 0; pointer-events: none; z-index: -1;
+    }
+    .bg-grid {
+      background-image:
+        linear-gradient(rgba(130,160,220,.07) 1px, transparent 1px),
+        linear-gradient(90deg, rgba(130,160,220,.07) 1px, transparent 1px);
+      background-size: 34px 34px;
+      mask-image: radial-gradient(circle at 50% 20%, #000 45%, transparent 85%);
+      animation: drift 18s linear infinite;
+    }
+    .bg-grid::before {
+      content: "";
+      background: linear-gradient(120deg, transparent 20%, rgba(118,166,255,.12) 48%, transparent 75%);
+      transform: translateX(-120%);
+      animation: sweep 7s ease-in-out infinite;
+    }
+
+    @keyframes drift { to { background-position: 0 34px, 34px 0; } }
+    @keyframes sweep { 50% { transform: translateX(120%);} 100% { transform: translateX(120%);} }
+    @keyframes pulse { 50% { box-shadow: 0 0 0 8px rgba(106,165,255,0);} }
+
+    .wrap { width: min(1180px, 92vw); margin: 24px auto 40px; }
+
+    .hero {
+      border: 1px solid var(--line);
+      background: linear-gradient(160deg, rgba(15,29,52,.8), rgba(10,19,34,.72));
+      border-radius: 20px;
+      box-shadow: var(--glow);
+      padding: 22px;
+      position: relative;
+      overflow: hidden;
+    }
+    .hero::after {
+      content: "";
+      position: absolute; right: -60px; top: -60px;
+      width: 280px; height: 280px; border-radius: 50%;
+      background: radial-gradient(circle, rgba(120,170,255,.35), transparent 68%);
+      filter: blur(2px);
+    }
+
+    .head { display:flex; justify-content:space-between; gap:12px; align-items:flex-start; flex-wrap:wrap; }
+    .title { font-size: 30px; font-weight: 800; letter-spacing:.3px; margin:0; }
+    .sub { color: var(--sub); margin-top: 10px; font-size: 14px; }
+
+    .badge {
+      display:inline-flex; align-items:center; gap:8px;
+      font-size:12px; color:#c7d7ff; padding:8px 12px;
+      border:1px solid rgba(120,170,255,.35);
+      border-radius:999px;
+      background: rgba(17,34,61,.65);
+    }
+    .dot {
+      width:8px; height:8px; border-radius:50%; background:#67e8f9;
+      box-shadow: 0 0 0 0 rgba(103,232,249,.6);
+      animation: pulse 1.8s infinite;
+    }
+
+    .ticker {
+      margin-top: 16px;
+      border:1px solid rgba(111,161,255,.22);
+      background: rgba(7,17,31,.78);
+      border-radius: 12px;
+      overflow: hidden;
+      white-space: nowrap;
+    }
+    .ticker-track {
+      display: inline-block;
+      padding: 10px 0;
+      animation: tickerMove 24s linear infinite;
+      min-width: 100%;
+    }
+    .ticker span { margin: 0 16px; font-size: 13px; color:#bcd0f5; }
+    .up { color: var(--up); }
+    .down { color: var(--down); }
+    @keyframes tickerMove { from { transform: translateX(0);} to { transform: translateX(-50%);} }
+
+    .stats {
+      margin-top: 16px;
+      display:grid;
+      grid-template-columns: repeat(auto-fit,minmax(190px,1fr));
+      gap: 10px;
+    }
+    .stat {
+      border:1px solid rgba(120,170,255,.22);
+      border-radius: 12px;
+      padding: 12px;
+      background: rgba(11,21,38,.7);
+    }
+    .stat .k { color:#95a8cc; font-size:12px; }
+    .stat .v { margin-top:6px; font-size:20px; font-weight:700; }
+
+    .section {
+      margin-top: 16px;
+      border: 1px solid var(--line);
+      background: var(--card);
+      border-radius: 16px;
+      padding: 16px;
+      backdrop-filter: blur(8px);
+    }
+    .section h2 { margin: 0 0 12px; font-size: 17px; }
+
+    .core-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(230px, 1fr));
+      gap: 12px;
+    }
+
+    .feature {
+      display:block;
+      text-decoration:none;
+      color: var(--text);
+      border:1px solid rgba(122,168,255,.24);
+      border-radius: 14px;
+      padding: 14px;
+      background: linear-gradient(165deg, rgba(19,36,66,.86), rgba(12,25,43,.7));
+      transition: .25s transform, .25s border-color, .25s box-shadow;
+      position: relative;
+      overflow: hidden;
+    }
+    .feature::before {
+      content:"";
+      position:absolute; inset:auto -30% -40% auto;
+      width:170px; height:170px; border-radius:50%;
+      background: radial-gradient(circle, rgba(100,151,255,.26), transparent 72%);
+      pointer-events:none;
+    }
+    .feature:hover {
+      transform: translateY(-4px);
+      border-color: rgba(150,190,255,.5);
+      box-shadow: 0 12px 30px rgba(71,125,255,.25);
+    }
+    .feature .name { font-size:15px; font-weight:700; line-height:1.35; }
+    .feature .desc { margin-top:8px; color:#a8bbdf; font-size:12px; }
+
+    .minor {
+      display:flex; flex-wrap:wrap; gap:8px;
+    }
+    .minor a {
+      text-decoration:none;
+      color:#c8d7f6;
+      border:1px solid rgba(122,168,255,.25);
+      border-radius:999px;
+      padding:8px 12px;
+      font-size:13px;
+      background: rgba(14,27,49,.7);
+      transition:.2s;
+    }
+    .minor a:hover { border-color: rgba(156,198,255,.55); color:#fff; transform: translateY(-2px); }
+
+    .footer { margin-top: 14px; color:#7f92b8; font-size:12px; }
+  </style>
 </head>
 <body>
-<main class="container">
-  <h1>📚 功能目录</h1>
-  <p class="sub">首页仅保留目录跳转，具体内容放到独立功能页。</p>
+  <div class="bg-grid"></div>
 
-  <section class="card">
-    <h2>核心功能</h2>
-    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:10px">
-      <a class="btn" href="/stock-research">股票行业研报分析（基于qwen-plus）</a>
-      <a class="btn" href="/news">24小时新闻雷达</a>
-      <a class="btn" href="/volume-profile">成交量价位分布</a>
-      <a class="btn" href="/shortline-dashboard">短线排名+行业资金流入</a>
-    </div>
-  </section>
+  <main class="wrap">
+    <section class="hero">
+      <div class="head">
+        <div>
+          <h1 class="title">Stock326 · A股智能研判中枢</h1>
+          <div class="sub">聚合研报、新闻、资金与盘口，做「盘前预案 + 盘中跟踪 + 盘后复盘」的一体化决策面板。</div>
+        </div>
+        <div class="badge"><span class="dot"></span><span id="market-status">市场状态加载中...</span></div>
+      </div>
 
-  <section class="card">
-    <h2>辅助功能</h2>
-    <div style="display:flex;gap:8px;flex-wrap:wrap">
-      <a class="btn secondary" href="/monitor-big-buy">盘口大笔主动买入监控</a>
-      <a class="btn secondary" href="/oversold-rebound">超跌反弹扫描</a>
-      <a class="btn secondary" href="/market-pulse">市场脉搏（涨跌家数/领涨）</a>
-      <a class="btn secondary" href="/flow-divergence">资金流入为正但收益为负（2~3日）</a>
-      <a class="btn secondary" href="/main-net-inflow">30天主力净流入</a>
-      <a class="btn secondary" href="/parse-admin">后台解析页</a>
-      <a class="btn secondary" href="/policy-dashboard">中国财政/货币政策全景</a>
-      <a class="btn secondary" href="/validation">策略验证页</a>
-    </div>
-  </section>
-</main>
-</body></html>
+      <div class="ticker" aria-hidden="true">
+        <div class="ticker-track" id="ticker-track">
+          <span>上证指数 <b class="up">+0.68%</b></span>
+          <span>深证成指 <b class="down">-0.14%</b></span>
+          <span>创业板指 <b class="up">+1.12%</b></span>
+          <span>北向资金 <b class="up">+23.6亿</b></span>
+          <span>两市成交额 <b>9234亿</b></span>
+          <span>涨跌家数 <b class="up">3210 / 1812</b></span>
+        </div>
+      </div>
+
+      <div class="stats">
+        <div class="stat"><div class="k">当前时间（上海）</div><div class="v" id="now-cn">--:--:--</div></div>
+        <div class="stat"><div class="k">核心分析入口</div><div class="v">4 个</div></div>
+        <div class="stat"><div class="k">辅助工具入口</div><div class="v">8 个</div></div>
+        <div class="stat"><div class="k">系统定位</div><div class="v">研究 + 交易辅助</div></div>
+      </div>
+    </section>
+
+    <section class="section">
+      <h2>核心功能</h2>
+      <div class="core-grid">
+        <a class="feature" href="/stock-research">
+          <div class="name">股票行业研报分析（基于qwen-plus）</div>
+          <div class="desc">多源研报抽取 + 主营业务图谱 + 思维导图结构化展示</div>
+        </a>
+        <a class="feature" href="/news">
+          <div class="name">24小时新闻雷达</div>
+          <div class="desc">快速浏览市场异动新闻，捕捉事件驱动机会</div>
+        </a>
+        <a class="feature" href="/volume-profile">
+          <div class="name">成交量价位分布</div>
+          <div class="desc">筹码密集区识别，辅助判断支撑位与压力位</div>
+        </a>
+        <a class="feature" href="/shortline-dashboard">
+          <div class="name">短线排名+行业资金流入</div>
+          <div class="desc">热点赛道与强势个股联动观察，适合盘中跟踪</div>
+        </a>
+      </div>
+    </section>
+
+    <section class="section">
+      <h2>辅助功能</h2>
+      <div class="minor">
+        <a href="/monitor-big-buy">盘口大笔主动买入监控</a>
+        <a href="/oversold-rebound">超跌反弹扫描</a>
+        <a href="/market-pulse">市场脉搏（涨跌家数/领涨）</a>
+        <a href="/flow-divergence">资金流入为正但收益为负（2~3日）</a>
+        <a href="/main-net-inflow">30天主力净流入</a>
+        <a href="/parse-admin">后台解析页</a>
+        <a href="/policy-dashboard">中国财政/货币政策全景</a>
+        <a href="/validation">策略验证页</a>
+      </div>
+    </section>
+
+    <div class="footer">Stock326 · 为A股研究与交易执行打造的智能工作台</div>
+  </main>
+
+  <script>
+    function pad(n){ return String(n).padStart(2, '0'); }
+    function updateClock() {
+      const now = new Date();
+      const cn = new Date(now.toLocaleString('en-US', { timeZone: 'Asia/Shanghai' }));
+      const hh = cn.getHours(), mm = cn.getMinutes(), ss = cn.getSeconds();
+      document.getElementById('now-cn').textContent = `${pad(hh)}:${pad(mm)}:${pad(ss)}`;
+
+      const minutes = hh * 60 + mm;
+      const open1 = 9 * 60 + 30, close1 = 11 * 60 + 30;
+      const open2 = 13 * 60, close2 = 15 * 60;
+      const status = (minutes >= open1 && minutes <= close1) || (minutes >= open2 && minutes <= close2)
+        ? 'A股交易时段（实时盯盘中）'
+        : '非交易时段（盘前/盘后研究）';
+      document.getElementById('market-status').textContent = status;
+    }
+
+    // ticker 双份拼接实现无缝滚动
+    const track = document.getElementById('ticker-track');
+    track.innerHTML = track.innerHTML + track.innerHTML;
+
+    updateClock();
+    setInterval(updateClock, 1000);
+  </script>
+</body>
+</html>
