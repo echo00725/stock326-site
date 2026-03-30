@@ -1318,6 +1318,64 @@ def api_market_pulse():
         return jsonify({"ok": True, "degraded": True, "message": f"市场脉搏实时源异常，已降级：{e}", "data": degraded})
 
 
+def _fetch_index_snapshot(secid: str, name: str) -> dict:
+    url = "https://push2.eastmoney.com/api/qt/stock/get"
+    params = {
+        "secid": secid,
+        "fields": "f43,f170,f58",
+        "ut": "fa5fd1943c7b386f172d6893dbfba10b",
+    }
+    r = _rq_get(url, params=params, timeout=4)
+    r.raise_for_status()
+    d = (r.json() or {}).get("data") or {}
+    price = float(d.get("f43") or 0) / 100
+    chg_pct = float(d.get("f170") or 0) / 100
+    return {"name": name, "price": round(price, 2), "chg_pct": round(chg_pct, 2)}
+
+
+def _fetch_northbound_net_yi() -> float:
+    url = "https://push2.eastmoney.com/api/qt/kamt/get"
+    params = {
+        "fields1": "f1,f2,f3,f4",
+        "fields2": "f51,f52,f53,f54,f55,f56,f57,f58",
+    }
+    r = _rq_get(url, params=params, timeout=4)
+    r.raise_for_status()
+    d = (r.json() or {}).get("data") or {}
+    # dayNetAmtIn 单位为“万”，转换为“亿”
+    sh = float(((d.get("hk2sh") or {}).get("dayNetAmtIn") or 0))
+    sz = float(((d.get("hk2sz") or {}).get("dayNetAmtIn") or 0))
+    return round((sh + sz) / 10000, 2)
+
+
+@app.route("/api/home-ticker")
+def api_home_ticker():
+    try:
+        pulse = _market_pulse()
+        stats = pulse.get("stats") or {}
+        idx = {
+            "sh": _fetch_index_snapshot("1.000001", "上证指数"),
+            "sz": _fetch_index_snapshot("0.399001", "深证成指"),
+            "cyb": _fetch_index_snapshot("0.399006", "创业板指"),
+        }
+        nb = _fetch_northbound_net_yi()
+        return jsonify({
+            "ok": True,
+            "data": {
+                "updated_at": _cn_now().strftime("%Y-%m-%d %H:%M:%S"),
+                "indices": idx,
+                "northbound_net_yi": nb,
+                "amount_total_yi": round(float(stats.get("amount_total") or 0), 2),
+                "up": int(stats.get("up") or 0),
+                "down": int(stats.get("down") or 0),
+                "total": int(stats.get("total") or 0),
+                "source": "eastmoney_realtime",
+            },
+        })
+    except Exception as e:
+        return jsonify({"ok": False, "error": f"home ticker fetch failed: {e}"}), 500
+
+
 @app.route("/api/validation")
 def api_validation():
     return jsonify(load_json(VALIDATION_FILE, {}))

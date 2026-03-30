@@ -225,12 +225,7 @@
 
       <div class="ticker" aria-hidden="true">
         <div class="ticker-track" id="ticker-track">
-          <span>上证指数 <b class="up">+0.68%</b></span>
-          <span>深证成指 <b class="down">-0.14%</b></span>
-          <span>创业板指 <b class="up">+1.12%</b></span>
-          <span>北向资金 <b class="up">+23.6亿</b></span>
-          <span>两市成交额 <b>9234亿</b></span>
-          <span>涨跌家数 <b class="up">3210 / 1812</b></span>
+          <span>行情加载中...</span>
         </div>
       </div>
 
@@ -444,13 +439,42 @@
       document.getElementById('market-status').textContent = status;
     }
 
-    // ticker 双份拼接实现无缝滚动
-    const track = document.getElementById('ticker-track');
-    track.innerHTML = track.innerHTML + track.innerHTML;
+    function clsBySign(v){ return Number(v) >= 0 ? 'up' : 'down'; }
+    function fmtPct(v){
+      const n = Number(v || 0);
+      return `${n >= 0 ? '+' : ''}${n.toFixed(2)}%`;
+    }
+    function fmtYi(v){
+      const n = Number(v || 0);
+      return `${n >= 0 ? '+' : ''}${n.toFixed(2)}亿`;
+    }
+    function renderTicker(d) {
+      const track = document.getElementById('ticker-track');
+      if (!track || !d) return;
+      const s = [];
+      s.push(`<span>上证指数 <b class="${clsBySign(d.indices?.sh?.chg_pct)}">${fmtPct(d.indices?.sh?.chg_pct)}</b></span>`);
+      s.push(`<span>深证成指 <b class="${clsBySign(d.indices?.sz?.chg_pct)}">${fmtPct(d.indices?.sz?.chg_pct)}</b></span>`);
+      s.push(`<span>创业板指 <b class="${clsBySign(d.indices?.cyb?.chg_pct)}">${fmtPct(d.indices?.cyb?.chg_pct)}</b></span>`);
+      s.push(`<span>北向资金 <b class="${clsBySign(d.northbound_net_yi)}">${fmtYi(d.northbound_net_yi)}</b></span>`);
+      s.push(`<span>两市成交额 <b>${Number(d.amount_total_yi || 0).toFixed(2)}亿</b></span>`);
+      s.push(`<span>涨跌家数 <b class="up">${d.up || 0}</b> / <b class="down">${d.down || 0}</b></span>`);
+      const html = s.join('');
+      track.innerHTML = html + html;
+    }
+
+    async function refreshTicker() {
+      try {
+        const res = await fetch(`/api/home-ticker?t=${Date.now()}`);
+        const j = await res.json();
+        if (j.ok && j.data) renderTicker(j.data);
+      } catch (_) {}
+    }
 
     applyFilter();
     updateClock();
     setInterval(updateClock, 1000);
+    refreshTicker();
+    setInterval(refreshTicker, 30000);
   </script>
 </body>
 </html>
