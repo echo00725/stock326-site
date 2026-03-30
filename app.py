@@ -320,10 +320,10 @@ def _fetch_universe_realtime(limit_pages: int = 40) -> list[dict]:
                 {
                     "code": code,
                     "name": name,
-                    "price": float(d.get("f2") or 0),
-                    "chg": float(d.get("f3") or 0),
-                    "amount": float(d.get("f6") or 0),
-                    "turnover": float(d.get("f8") or 0),
+                    "price": _num(d.get("f2")),
+                    "chg": _num(d.get("f3")),
+                    "amount": _num(d.get("f6")),
+                    "turnover": _num(d.get("f8")),
                     "high": float(d.get("f15") or 0),
                     "low": float(d.get("f16") or 0),
                     "open": float(d.get("f17") or 0),
@@ -755,6 +755,14 @@ def _fetch_universe_fast_full() -> tuple[list[dict], int, int]:
     # 东财该接口单页实际上限约100，按100分页可覆盖全量
     page_size = 100
 
+    def _num(v):
+        try:
+            if v in (None, "", "-"):
+                return 0.0
+            return float(v)
+        except Exception:
+            return 0.0
+
     for fs in market_segments:
         first_params = {
             "pn": 1,
@@ -786,12 +794,12 @@ def _fetch_universe_fast_full() -> tuple[list[dict], int, int]:
                 {
                     "code": str(d.get("f12") or ""),
                     "name": str(d.get("f14") or ""),
-                    "price": float(d.get("f2") or 0),
-                    "chg": float(d.get("f3") or 0),
-                    "amount": float(d.get("f6") or 0),
-                    "turnover": float(d.get("f8") or 0),
-                    "chg60": float(d.get("f24") or 0),
-                    "ytd": float(d.get("f25") or 0),
+                    "price": _num(d.get("f2")),
+                    "chg": _num(d.get("f3")),
+                    "amount": _num(d.get("f6")),
+                    "turnover": _num(d.get("f8")),
+                    "chg60": _num(d.get("f24")),
+                    "ytd": _num(d.get("f25")),
                 }
             )
 
@@ -810,12 +818,12 @@ def _fetch_universe_fast_full() -> tuple[list[dict], int, int]:
                     {
                         "code": str(d.get("f12") or ""),
                         "name": str(d.get("f14") or ""),
-                        "price": float(d.get("f2") or 0),
-                        "chg": float(d.get("f3") or 0),
-                        "amount": float(d.get("f6") or 0),
-                        "turnover": float(d.get("f8") or 0),
-                        "chg60": float(d.get("f24") or 0),
-                        "ytd": float(d.get("f25") or 0),
+                        "price": _num(d.get("f2")),
+                        "chg": _num(d.get("f3")),
+                        "amount": _num(d.get("f6")),
+                        "turnover": _num(d.get("f8")),
+                        "chg60": _num(d.get("f24")),
+                        "ytd": _num(d.get("f25")),
                     }
                 )
 
