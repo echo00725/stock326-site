@@ -857,7 +857,8 @@ def _oversold_rebound_scan() -> dict:
 
 def _market_pulse() -> dict:
     now = _cn_now().strftime("%Y-%m-%d %H:%M:%S")
-    uni = _fetch_universe_realtime(limit_pages=12)
+    # 全市场口径：30页 * 200 = 6000（覆盖沪深A股主流样本）
+    uni = _fetch_universe_realtime(limit_pages=30)
     up = sum(1 for x in uni if x["chg"] > 0)
     down = sum(1 for x in uni if x["chg"] < 0)
     flat = len(uni) - up - down
