@@ -738,32 +738,48 @@ def _rsi14(closes: list[float]) -> float:
 
 
 def _fetch_universe_fast_full() -> tuple[list[dict], int, int]:
-    # 全市场快速版：分片抓取；优先用于“涨跌家数”口径
+    # 全市场快速版：分板块抓取并去重（避免组合 fs 被限流/截断）
     rows = []
     ok_pages = 0
-    total_pages = 14
-    for pn in range(1, total_pages + 1):
-        url = "https://push2.eastmoney.com/api/qt/clist/get"
-        params = {
-            "pn": pn,
-            "pz": 500,
+    total_pages = 0
+
+    market_segments = [
+        "m:0 t:6",            # 深A
+        "m:1 t:2",            # 沪A
+        "m:1 t:23",           # 科创
+        "m:0 t:80",           # 创业板等
+        "m:0 t:81 s:2048",    # 北交所
+    ]
+
+    url = "https://push2.eastmoney.com/api/qt/clist/get"
+    page_size = 500
+
+    for fs in market_segments:
+        first_params = {
+            "pn": 1,
+            "pz": page_size,
             "po": 1,
             "np": 1,
             "fltt": 2,
             "invt": 2,
             "fid": "f6",
-            "fs": "m:0 t:6,m:0 t:80,m:1 t:2,m:1 t:23,m:0 t:81 s:2048",
+            "fs": fs,
             "fields": "f12,f14,f2,f3,f6,f8,f24,f25",
             "ut": "fa5fd1943c7b386f172d6893dbfba10b",
         }
         try:
-            # 此处不用重试，避免单次刷新卡住
-            r = requests.get(url, params=params, timeout=3.5, proxies={"http": None, "https": None})
+            r = requests.get(url, params=first_params, timeout=3.5, proxies={"http": None, "https": None})
             r.raise_for_status()
-            diff = ((r.json().get("data") or {}).get("diff")) or []
+            j = r.json() or {}
+            data = j.get("data") or {}
+            diff = data.get("diff") or []
+            seg_total = int(data.get("total") or 0)
+            seg_pages = max(1, (seg_total + page_size - 1) // page_size)
+            total_pages += seg_pages
             ok_pages += 1
         except Exception:
             continue
+
         for d in diff:
             rows.append(
                 {
@@ -777,8 +793,38 @@ def _fetch_universe_fast_full() -> tuple[list[dict], int, int]:
                     "ytd": float(d.get("f25") or 0),
                 }
             )
-    filtered = [x for x in rows if len(x["code"]) == 6 and x["price"] > 0]
-    return filtered, ok_pages, total_pages
+
+        for pn in range(2, seg_pages + 1):
+            params = dict(first_params)
+            params["pn"] = pn
+            try:
+                r = requests.get(url, params=params, timeout=3.5, proxies={"http": None, "https": None})
+                r.raise_for_status()
+                diff = ((r.json().get("data") or {}).get("diff")) or []
+                ok_pages += 1
+            except Exception:
+                continue
+            for d in diff:
+                rows.append(
+                    {
+                        "code": str(d.get("f12") or ""),
+                        "name": str(d.get("f14") or ""),
+                        "price": float(d.get("f2") or 0),
+                        "chg": float(d.get("f3") or 0),
+                        "amount": float(d.get("f6") or 0),
+                        "turnover": float(d.get("f8") or 0),
+                        "chg60": float(d.get("f24") or 0),
+                        "ytd": float(d.get("f25") or 0),
+                    }
+                )
+
+    uniq = {}
+    for x in rows:
+        c = str(x.get("code") or "")
+        if len(c) == 6 and (x.get("price") or 0) > 0:
+            uniq[c] = x
+    filtered = list(uniq.values())
+    return filtered, ok_pages, max(total_pages, 1)
 
 
 def _oversold_rebound_scan() -> dict:
