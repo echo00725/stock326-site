@@ -34,6 +34,7 @@
     .bg-grid, .bg-grid::before {
       position: fixed; inset: 0; pointer-events: none; z-index: -1;
     }
+    #fx-canvas { filter: saturate(1.05) contrast(1.02); }
     .bg-grid {
       background-image:
         linear-gradient(rgba(130,160,220,.07) 1px, transparent 1px),
@@ -209,6 +210,7 @@
   </style>
 </head>
 <body>
+  <canvas id="fx-canvas" style="position:fixed;inset:0;z-index:-2;pointer-events:none;"></canvas>
   <div class="bg-grid"></div>
 
   <main class="wrap">
@@ -317,6 +319,115 @@
       applyFilter();
     }));
     searchEl.addEventListener('input', applyFilter);
+
+    // 交互背景：粒子 + 连线 + K线波形（鼠标联动）
+    (() => {
+      const canvas = document.getElementById('fx-canvas');
+      if (!canvas) return;
+      const ctx = canvas.getContext('2d');
+      const DPR = Math.max(1, Math.min(2, window.devicePixelRatio || 1));
+      let w = 0, h = 0, raf = null;
+      const mouse = { x: -9999, y: -9999, active: false };
+
+      const points = Array.from({ length: 68 }, () => ({
+        x: Math.random(), y: Math.random(),
+        vx: (Math.random() - 0.5) * 0.00055,
+        vy: (Math.random() - 0.5) * 0.00055,
+        r: 1 + Math.random() * 1.8
+      }));
+
+      function resize() {
+        w = window.innerWidth;
+        h = window.innerHeight;
+        canvas.width = Math.floor(w * DPR);
+        canvas.height = Math.floor(h * DPR);
+        canvas.style.width = w + 'px';
+        canvas.style.height = h + 'px';
+        ctx.setTransform(DPR, 0, 0, DPR, 0, 0);
+      }
+
+      function drawGrid(t) {
+        const gap = 44;
+        ctx.strokeStyle = 'rgba(115,150,220,.08)';
+        ctx.lineWidth = 1;
+        const ox = (t * 0.012) % gap;
+        for (let x = -gap; x < w + gap; x += gap) {
+          ctx.beginPath();
+          ctx.moveTo(x + ox, 0); ctx.lineTo(x + ox, h); ctx.stroke();
+        }
+        for (let y = 0; y < h + gap; y += gap) {
+          ctx.beginPath();
+          ctx.moveTo(0, y); ctx.lineTo(w, y); ctx.stroke();
+        }
+      }
+
+      function drawPriceWave(t) {
+        ctx.lineWidth = 2;
+        const grad = ctx.createLinearGradient(0, 0, w, 0);
+        grad.addColorStop(0, 'rgba(80,130,255,.75)');
+        grad.addColorStop(1, 'rgba(38,198,218,.75)');
+        ctx.strokeStyle = grad;
+
+        ctx.beginPath();
+        const base = h * 0.62;
+        for (let x = 0; x <= w; x += 8) {
+          const y = base + Math.sin((x + t * 0.18) * 0.012) * 16 + Math.sin((x + t * 0.06) * 0.021) * 8;
+          if (x === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+        }
+        ctx.stroke();
+      }
+
+      function drawParticles() {
+        for (const p of points) {
+          p.x += p.vx; p.y += p.vy;
+          if (p.x < 0 || p.x > 1) p.vx *= -1;
+          if (p.y < 0 || p.y > 1) p.vy *= -1;
+          const px = p.x * w, py = p.y * h;
+
+          if (mouse.active) {
+            const dx = mouse.x - px, dy = mouse.y - py;
+            const d2 = dx * dx + dy * dy;
+            if (d2 < 18000) {
+              p.x -= dx * 0.0000018;
+              p.y -= dy * 0.0000018;
+            }
+          }
+
+          ctx.beginPath();
+          ctx.fillStyle = 'rgba(130,182,255,.72)';
+          ctx.arc(px, py, p.r, 0, Math.PI * 2);
+          ctx.fill();
+        }
+
+        for (let i = 0; i < points.length; i++) {
+          for (let j = i + 1; j < points.length; j++) {
+            const a = points[i], b = points[j];
+            const ax = a.x * w, ay = a.y * h, bx = b.x * w, by = b.y * h;
+            const dx = ax - bx, dy = ay - by;
+            const d = Math.hypot(dx, dy);
+            if (d < 120) {
+              ctx.strokeStyle = `rgba(126,168,255,${(1 - d / 120) * 0.28})`;
+              ctx.lineWidth = 1;
+              ctx.beginPath(); ctx.moveTo(ax, ay); ctx.lineTo(bx, by); ctx.stroke();
+            }
+          }
+        }
+      }
+
+      function frame(ts) {
+        ctx.clearRect(0, 0, w, h);
+        drawGrid(ts);
+        drawPriceWave(ts);
+        drawParticles();
+        raf = requestAnimationFrame(frame);
+      }
+
+      window.addEventListener('resize', resize);
+      window.addEventListener('mousemove', (e) => { mouse.x = e.clientX; mouse.y = e.clientY; mouse.active = true; });
+      window.addEventListener('mouseleave', () => { mouse.active = false; });
+      resize();
+      raf = requestAnimationFrame(frame);
+    })();
 
     function updateClock() {
       const now = new Date();
